@@ -1,0 +1,5 @@
+youtube_search
+pytube
+opencv-python
+numpy
+ultralytics
