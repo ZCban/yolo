@@ -151,7 +151,7 @@ def elimino0_50SEG():
     for filename in tqdm(os.listdir(input_folder)):
         image_path = os.path.join(input_folder, filename)
         image = Image.open(image_path)#.convert("RGB")
-        results = model.predict(image, classes=[1,], conf=0.51)
+        results = model.predict(image, classes=[1,], conf=0.50)
         targets = []
         # Loop attraverso i risultati della predizione
         for result in results:
