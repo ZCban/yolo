@@ -89,14 +89,14 @@ def video_to_frame(target_size, frames_to_skip=100):
     cv2.destroyAllWindows()
 
 
-def mantieni0_35():
+def mantieni0_25():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     input_folder = os.path.join(script_dir, "frames_extracted")
 
     for filename in tqdm(os.listdir(input_folder)):
         image_path = os.path.join(input_folder, filename)
         image = Image.open(image_path)#.convert("RGB")
-        results = model.predict(image, classes=[0,], conf=0.35)
+        results = model.predict(image, classes=[0,], conf=0.25)
         targets = []
         # Loop attraverso i risultati della predizione
         for result in results:
@@ -129,6 +129,34 @@ def elimino0_50():
         if  targets:
             os.remove(image_path)
 
+def mantieni0_25SEG():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    input_folder = os.path.join(script_dir, "frames_extracted")
+
+    for filename in tqdm(os.listdir(input_folder)):
+        image_path = os.path.join(input_folder, filename)
+        image = Image.open(image_path)#.convert("RGB")
+        results = model.predict(image, classes=[0,], conf=0.25)
+        targets = []
+        # Loop attraverso i risultati della predizione
+        for result in results:
+            if result.masks is not None:
+                os.remove(image_path)
+                
+
+def elimino0_50SEG():
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    input_folder = os.path.join(script_dir, "frames_extracted")
+
+    for filename in tqdm(os.listdir(input_folder)):
+        image_path = os.path.join(input_folder, filename)
+        image = Image.open(image_path)#.convert("RGB")
+        results = model.predict(image, classes=[1,], conf=0.51)
+        targets = []
+        # Loop attraverso i risultati della predizione
+        for result in results:
+            if result.masks is not None:
+                os.remove(image_path)
                 
 while True:
     print('cercando video')
