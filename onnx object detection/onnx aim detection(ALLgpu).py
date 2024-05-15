@@ -16,6 +16,7 @@ fovx=2.2
 fovy=1.2
 activationkey=0x05
 modelname='448.onnx'
+fpslimit=80
 
 # Get screen resolution dynamically
 screen_width = GetSystemMetrics(0)
@@ -26,7 +27,7 @@ left, top = (screen_width - screenshot) // 2, (screen_height - screenshot) // 2
 right, bottom = left + screenshot, top + screenshot
 region = (left, top, right, bottom)
 cam = bettercam.create(output_idx=0, output_color="BGR")
-cam.start(region=region, video_mode=True, target_fps=0)
+cam.start(region=region, video_mode=True, target_fps=fpslimit)
 center = screenshot / 2
 
 ##setup kmnet
