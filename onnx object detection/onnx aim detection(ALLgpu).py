@@ -7,25 +7,29 @@ import win32api
 from win32api import GetSystemMetrics
 import time
 
+# setting int
+screenshot = 448
+countfps = True
+movespeed = 2
+visual = False
+fovx=2.2
+fovy=1.2
+activationkey=0x05
+modelname='448.onnx'
+
 # Get screen resolution dynamically
 screen_width = GetSystemMetrics(0)
 screen_height = GetSystemMetrics(1)
 
-# Initialize your webcam capture
-screenshot = 448
+##setup bettercam##
 left, top = (screen_width - screenshot) // 2, (screen_height - screenshot) // 2
 right, bottom = left + screenshot, top + screenshot
 region = (left, top, right, bottom)
 cam = bettercam.create(output_idx=0, output_color="BGR")
-cam.start(region=region, video_mode=True, target_fps=85)
+cam.start(region=region, video_mode=True, target_fps=0)
 center = screenshot / 2
-countfps = False
-movespeed = 2
-visual = True
 
-# Initialize the ONNX model
-model = ONNX('448.onnx', 0.6, 0.5)
-
+##setup kmnet
 kmNet.init('192.168.2.188', '1408', '9FC05414')
 
 # Variables for FPS calculation
@@ -50,8 +54,7 @@ class Predict:
         return postprocess
 
     def preprocess(self, image):
-        self.img_height, self.img_width = image.shape[:2]
-        blob = cv2.dnn.blobFromImage(image, scalefactor=1/255.0, size=(self.input_width, self.input_height), swapRB=True, crop=False)
+        blob = np.ascontiguousarray(image.transpose(2, 0, 1)[np.newaxis, ...], dtype=np.float32) / 255.0
         return blob
 
     def inference(self, input_tensor):
@@ -65,7 +68,7 @@ class Predict:
         scores = scores[scores > self.confidence_thres]
         class_ids = np.argmax(outputs[:, 4:], axis=1)
         boxes = self.extract_boxes(outputs)
-        indices = self.multiclass_nms(boxes, scores, class_ids, self.iou_thres)
+        indices = self.non_max_suppression(boxes, scores, self.iou_thres)
         arry_box = []
         for i in indices:
             box, score, class_id = boxes[i, :4], scores[i], class_ids[i]
@@ -80,51 +83,36 @@ class Predict:
         y[..., 3] = x[..., 1] + x[..., 3] / 2
         return y
 
+
     def extract_boxes(self, predictions):
         boxes = predictions[:, :4]
-        boxes = self.rescale_boxes(boxes)
         boxes = self.xywh2xyxy(boxes)
         return boxes
 
-    def rescale_boxes(self, boxes):
-        input_shape = np.array([self.input_width, self.input_height, self.input_width, self.input_height])
-        boxes = np.divide(boxes, input_shape, dtype=np.float32)
-        boxes *= np.array([self.img_width, self.img_height, self.img_width, self.img_height])
-        return boxes
-
-    def intersection_over_union(self, boxA, boxB):
-        xA = np.maximum(boxA[0], boxB[0])
-        yA = np.maximum(boxA[1], boxB[1])
-        xB = np.minimum(boxA[2], boxB[2])
-        yB = np.minimum(boxA[3], boxB[3])
-        inter_area = max(0, xB - xA + 1) * max(0, yB - yA + 1)
-        boxA_area = (boxA[2] - boxA[0] + 1) * (boxA[3] - boxA[1] + 1)
-        boxB_area = (boxB[2] - boxB[0] + 1) * (boxB[3] - boxB[1] + 1)
-        iou = inter_area / float(boxA_area + boxB_area - inter_area)
-        return iou
-
     def non_max_suppression(self, boxes, scores, iou_threshold):
-        indices = np.argsort(scores)[::-1]
-        selected_indices = []
-        while len(indices) > 0:
-            current_index = indices[0]
-            selected_indices.append(current_index)
-            current_box = boxes[current_index]
-            other_boxes = boxes[indices[1:]]
-            iou_values = np.array([self.intersection_over_union(current_box, other_box) for other_box in other_boxes])
-            indices = indices[np.where(iou_values <= iou_threshold)[0] + 1]
-        return np.array(selected_indices)
+        x1 = boxes[:, 0]
+        y1 = boxes[:, 1]
+        x2 = boxes[:, 2]
+        y2 = boxes[:, 3]
+        areas = (x2 - x1) * (y2 - y1)
+        order = scores.argsort()[::-1]
 
-    def multiclass_nms(self, boxes, scores, class_ids, iou_threshold):
-        unique_class_ids = np.unique(class_ids)
-        selected_indices = []
-        for class_id in unique_class_ids:
-            class_mask = (class_ids == class_id)
-            class_boxes = boxes[class_mask]
-            class_scores = scores[class_mask]
-            indices = self.non_max_suppression(class_boxes, class_scores, iou_threshold)
-            selected_indices.extend(np.where(class_mask)[0][indices])
-        return np.array(selected_indices)
+        keep = []
+        while order.size > 0:
+            i = order[0]
+            keep.append(i)
+            xx1 = np.maximum(x1[i], x1[order[1:]])
+            yy1 = np.maximum(y1[i], y1[order[1:]])
+            xx2 = np.minimum(x2[i], x2[order[1:]])
+            yy2 = np.minimum(y2[i], y2[order[1:]])
+
+            w = np.maximum(0, xx2 - xx1)
+            h = np.maximum(0, yy2 - yy1)
+            inter = w * h
+            iou = inter / (areas[i] + areas[order[1:]] - inter)
+            order = order[np.where(iou <= iou_threshold)[0] + 1]
+
+        return keep
 
     def get_input_details(self):
         model_inputs = self.session.get_inputs()
@@ -140,7 +128,7 @@ class Predict:
     def draw_detections(self, img, box, score, class_id):
         x1, y1, x2, y2 = box.astype(int)
         color = self.color_palette[class_id]
-        cv2.rectangle(img, (x1, y1), (x2, y2), tuple(color.tolist()), 2)
+        cv2.rectangle(img, (x1, y1), (x2, y2), tuple(color.tolist()), 1)
         label = f"{self.classes[class_id]}: {score:.2f}"
         (label_width, label_height), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
         label_x, label_y = x1, y1 - 10 if y1 - 10 > label_height else y1 + 10
@@ -161,6 +149,8 @@ class ONNX:
         return self.results
 
 
+# Initialize the ONNX model
+model = ONNX(modelname, 0.52, 0.55)
 
 while True:
     img = cam.get_latest_frame()
@@ -168,16 +158,13 @@ while True:
     targets = []
 
     for box, score, class_id, cls in results:
-        if visual:
-            model.predict_model.draw_detections(img, box, score, class_id)
         target_x = int((box[0] + box[2]) / 2)
         target_y = int((box[1] + box[3]) / 2)
-        # Calculate the height of the rectangle
         target_height = int(box[3] - box[1])
         targets.append((target_x, target_y, target_height))
 
-    if len(targets) > 0:
-        targets_array = np.array(targets)
+    targets_array = np.array(targets)
+    if len(targets_array) > 0:       
         # Calculate Euclidean distances between targets and center
         distances = np.linalg.norm(targets_array[:, :2] - center, axis=1)
         # Find the index of the nearest target
@@ -186,14 +173,18 @@ while True:
         nearest_target = targets[nearest_index]
         delta_x = int(nearest_target[0] - center)
         delta_y = int(nearest_target[1] - center)
-        delta_y -= int(nearest_target[2] / 3)
-        if win32api.GetKeyState(0x05) < 0:
+        delta_y -= int(nearest_target[2] / 2.8)
+        if win32api.GetKeyState(activationkey) < 0:
             kmNet.move(int(delta_x / movespeed), int(delta_y / movespeed))
-            if -2.5 <= delta_x / movespeed <= 2.5 and -1 <= delta_y / movespeed <= 1:
+            if -fovx <= delta_x / movespeed <= fovx and -fovy <= delta_y / movespeed <= fovy:
                 kmNet.left(1)
                 kmNet.left(0)
-            if not (-2.5 <= delta_x / movespeed <= 2.5 and -1 <= delta_y / movespeed <= 1):
-                kmNet.move(int(delta_x / movespeed), int(delta_y / movespeed))
+
+    if visual:
+        for box, score, class_id, cls in results:
+            model.predict_model.draw_detections(img, box, score, class_id)
+        cv2.imshow("Detected Objects", img)
+        cv2.waitKey(1)
 
     if countfps:
         frame_count += 1
@@ -204,13 +195,6 @@ while True:
             start_time = time.time()
             if not visual:
                 print(fps)
-
-    if visual:
-        if countfps:
-            # Display FPS on the image
-            cv2.putText(img, f"FPS: {fps:.2f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        cv2.imshow("Detected Objects", img)
-        cv2.waitKey(1)
 
 cv2.destroyAllWindows()
 cam.stop()
