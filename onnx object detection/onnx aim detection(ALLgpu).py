@@ -7,16 +7,18 @@ import win32api
 from win32api import GetSystemMetrics
 import time
 
+
 # setting int
 screenshot = 448
 countfps = True
-movespeed = 2
+fps_limit=60
+
 visual = False
 fovx=2.2
 fovy=1.2
 activationkey=0x05
 modelname='448.onnx'
-fpslimit=80
+
 
 # Get screen resolution dynamically
 screen_width = GetSystemMetrics(0)
@@ -26,8 +28,8 @@ screen_height = GetSystemMetrics(1)
 left, top = (screen_width - screenshot) // 2, (screen_height - screenshot) // 2
 right, bottom = left + screenshot, top + screenshot
 region = (left, top, right, bottom)
-cam = bettercam.create(output_idx=0, output_color="BGR")
-cam.start(region=region, video_mode=True, target_fps=fpslimit)
+cam = bettercam.create(output_idx=0, output_color="BGR",nvidia_gpu=True)
+cam.start(region=region, video_mode=True, target_fps=fps_limit)
 center = screenshot / 2
 
 ##setup kmnet
@@ -38,6 +40,10 @@ fps = 0
 frame_count = 0
 start_time = time.time()
 
+def calculate_movespeed(fps_limit, reference_fps=90, reference_movespeed=2):
+    return (reference_movespeed / reference_fps) * fps_limit
+
+movespeed=calculate_movespeed(fps_limit, reference_fps=90, reference_movespeed=2.2)
 class Predict:
     def __init__(self, onnx_model, confidence_thres, iou_thres):
         self.confidence_thres = confidence_thres
@@ -162,24 +168,27 @@ while True:
         target_x = int((box[0] + box[2]) / 2)
         target_y = int((box[1] + box[3]) / 2)
         target_height = int(box[3] - box[1])
-        targets.append((target_x, target_y, target_height))
+        targets.append((target_x, target_y,target_height))
 
     targets_array = np.array(targets)
     if len(targets_array) > 0:       
         # Calculate Euclidean distances between targets and center
-        distances = np.linalg.norm(targets_array[:, :2] - center, axis=1)
-        # Find the index of the nearest target
+        #distances = np.linalg.norm(targets_array[:, :1] - center, axis=1)
+        distances = targets_array[:, :1] - center
+
         nearest_index = np.argmin(distances)
         nearest_distance = distances[nearest_index]
         nearest_target = targets[nearest_index]
         delta_x = int(nearest_target[0] - center)
         delta_y = int(nearest_target[1] - center)
-        delta_y -= int(nearest_target[2] / 2.8)
+        delta_y -= int(nearest_target[2]/ 2.9)
+
         if win32api.GetKeyState(activationkey) < 0:
             kmNet.move(int(delta_x / movespeed), int(delta_y / movespeed))
-            if -fovx <= delta_x / movespeed <= fovx and -fovy <= delta_y / movespeed <= fovy:
+            if -fovx <= delta_x / movespeed <= fovx and -fovy <= delta_y / movespeed <= 0.5:
                 kmNet.left(1)
                 kmNet.left(0)
+
 
     if visual:
         for box, score, class_id, cls in results:
@@ -194,8 +203,7 @@ while True:
             fps = frame_count / elapsed_time
             frame_count = 0
             start_time = time.time()
-            if not visual:
-                print(fps)
+            print(fps)
 
 cv2.destroyAllWindows()
 cam.stop()
