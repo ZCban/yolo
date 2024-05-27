@@ -9,16 +9,15 @@ import time
 
 
 # setting int
-screenshot = 448
+screenshot = 350
 countfps = True
-fps_limit=60
-
-visual = False
-fovx=2.2
-fovy=1.2
-activationkey=0x05
-modelname='448.onnx'
-
+movespeed = 2
+visual = True
+fovx = 2.2
+fovy = 1.2
+activationkey = 0x05
+modelname = '640.onnx'
+fpslimit = 0
 
 # Get screen resolution dynamically
 screen_width = GetSystemMetrics(0)
@@ -28,9 +27,11 @@ screen_height = GetSystemMetrics(1)
 left, top = (screen_width - screenshot) // 2, (screen_height - screenshot) // 2
 right, bottom = left + screenshot, top + screenshot
 region = (left, top, right, bottom)
-cam = bettercam.create(output_idx=0, output_color="BGR",nvidia_gpu=True)
-cam.start(region=region, video_mode=True, target_fps=fps_limit)
+cam = bettercam.create(output_idx=0, output_color="BGR")
+cam.start(region=region, video_mode=True, target_fps=fpslimit)
 center = screenshot / 2
+center_x = screen_width / 2
+center_y = screen_height / 2
 
 ##setup kmnet
 kmNet.init('192.168.2.188', '1408', '9FC05414')
@@ -142,10 +143,31 @@ class Predict:
         cv2.rectangle(img, (label_x, label_y - label_height), (label_x + label_width, label_y + label_height), tuple(color.tolist()), cv2.FILLED)
         cv2.putText(img, label, (label_x, label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
 
+    def draw_esp(self, hdc, box, pen):
+        # Convert the bounding box coordinates to the new coordinate system
+        x1 = box[0] + center_x - (screenshot / 2)
+        y1 = box[1] + center_y - (screenshot / 2)
+        x2 = box[2] + center_x - (screenshot / 2)
+        y2 = box[3] + center_y - (screenshot / 2)
+
+        win32gui.SelectObject(hdc, pen)
+        brush = win32gui.GetStockObject(win32con.NULL_BRUSH)
+        win32gui.SelectObject(hdc, brush)
+        win32gui.Rectangle(hdc, int(x1), int(y1), int(x2), int(y2))  # Convert to integers
+
     def get_class_names(self):
         metadata = self.session.get_modelmeta().custom_metadata_map['names']
         class_names = [item.split(": ")[1].strip(" {}'") for item in metadata.split("', ")]
         return class_names
+
+    def update_fps(self):
+        self.frame_count += 1
+        elapsed_time = time.time() - self.start_time
+        if (elapsed_time) > 1:
+            self.fps = self.frame_count / elapsed_time
+            self.frame_count = 0
+            self.start_time = time.time()
+            print(self.fps)
 
 class ONNX:
     def __init__(self, onnx_model, confidence_thres, iou_thres):
@@ -158,6 +180,10 @@ class ONNX:
 
 # Initialize the ONNX model
 model = ONNX(modelname, 0.52, 0.55)
+# Create a single pen for the single class
+pen_color = (0, 255, 0)  # Example color, can be any RGB color
+pen = win32gui.CreatePen(win32con.PS_SOLID, 4, win32api.RGB(*pen_color))
+hdc = win32gui.GetDC(0)
 
 while True:
     img = cam.get_latest_frame()
@@ -192,19 +218,13 @@ while True:
 
     if visual:
         for box, score, class_id, cls in results:
-            model.predict_model.draw_detections(img, box, score, class_id)
-        cv2.imshow("Detected Objects", img)
-        cv2.waitKey(1)
+            # Draw bounding boxes on the screen
+            model.predict_model.draw_esp(hdc, box, pen)
+            #win32gui.ReleaseDC(0, hdc)
 
     if countfps:
-        frame_count += 1
-        elapsed_time = time.time() - start_time
-        if elapsed_time > 1:  # Update FPS every second
-            fps = frame_count / elapsed_time
-            frame_count = 0
-            start_time = time.time()
-            print(fps)
+        model.predict_model.update_fps()
 
 cv2.destroyAllWindows()
 cam.stop()
-
+win32gui.DeleteObject(pen)  # Clean up the pen
