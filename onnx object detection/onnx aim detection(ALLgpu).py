@@ -2,17 +2,18 @@ import onnxruntime as ort
 import cv2
 import numpy as np
 import bettercam
-import kmNet
+import torch
+import torchvision.transforms as transforms
 import win32api
 from win32api import GetSystemMetrics
 import time
-
 
 # setting int
 screenshot = 350
 countfps = True
 movespeed = 2
 visual = True
+
 fovx = 2.2
 fovy = 1.2
 activationkey = 0x05
@@ -29,22 +30,10 @@ right, bottom = left + screenshot, top + screenshot
 region = (left, top, right, bottom)
 cam = bettercam.create(output_idx=0, output_color="BGR")
 cam.start(region=region, video_mode=True, target_fps=fpslimit)
-center = screenshot / 2
-center_x = screen_width / 2
-center_y = screen_height / 2
+centerx = screenshot / 2
+centery= screenshot / 2
 
-##setup kmnet
-kmNet.init('192.168.2.188', '1408', '9FC05414')
 
-# Variables for FPS calculation
-fps = 0
-frame_count = 0
-start_time = time.time()
-
-def calculate_movespeed(fps_limit, reference_fps=90, reference_movespeed=2):
-    return (reference_movespeed / reference_fps) * fps_limit
-
-movespeed=calculate_movespeed(fps_limit, reference_fps=90, reference_movespeed=2.2)
 class Predict:
     def __init__(self, onnx_model, confidence_thres, iou_thres):
         self.confidence_thres = confidence_thres
@@ -55,14 +44,32 @@ class Predict:
         self.classes = self.get_class_names()
         self.color_palette = np.random.uniform(0, 255, size=(len(self.classes), 3)).astype(np.uint8)
 
+        # Variabili per il calcolo degli FPS
+        self.fps = 0
+        self.frame_count = 0
+        self.start_time = time.time()
+
     def detect_objects(self, image):
         input_tensor = self.preprocess(image)
         outputs = self.inference(input_tensor)
         postprocess = self.postprocess(image, outputs)
         return postprocess
 
+    def detect_objects_resize(self, image):
+        input_tensor = self.preprocess_resize(image)
+        outputs = self.inference(input_tensor)
+        postprocess = self.postprocess_resize(image, outputs)
+        return postprocess
+
     def preprocess(self, image):
-        blob = np.ascontiguousarray(image.transpose(2, 0, 1)[np.newaxis, ...], dtype=np.float32) / 255.0
+        self.img_height, self.img_width = image.shape[:2]
+        blob = cv2.dnn.blobFromImage(image, scalefactor=1/255.0, size=(self.input_width, self.input_height), swapRB=True, crop=False)
+        return blob
+
+    def preprocess_resize(self, image):
+        self.img_height, self.img_width = image.shape[:2]
+        resized_image = cv2.resize(image, (self.input_width, self.input_height))
+        blob = np.ascontiguousarray(resized_image.transpose(2, 0, 1)[np.newaxis, ...], dtype=np.float32) / 255.0
         return blob
 
     def inference(self, input_tensor):
@@ -76,12 +83,27 @@ class Predict:
         scores = scores[scores > self.confidence_thres]
         class_ids = np.argmax(outputs[:, 4:], axis=1)
         boxes = self.extract_boxes(outputs)
-        indices = self.non_max_suppression(boxes, scores, self.iou_thres)
+        indices = self.multiclass_nms(boxes, scores, class_ids, self.iou_thres)
         arry_box = []
         for i in indices:
             box, score, class_id = boxes[i, :4], scores[i], class_ids[i]
             arry_box.append((box, score, class_id, self.classes[class_id]))
         return arry_box, input_image
+
+    def postprocess_resize(self, input_image, outputs):
+        outputs = np.squeeze(outputs[0]).T
+        scores = np.max(outputs[:, 4:], axis=1)
+        outputs = outputs[scores > self.confidence_thres, :]
+        scores = scores[scores > self.confidence_thres]
+        class_ids = np.argmax(outputs[:, 4:], axis=1)
+        boxes = self.extract_boxes_rescale_boxes(outputs)
+        indices = self.multiclass_nms(boxes, scores, class_ids, self.iou_thres)
+        arry_box = []
+        for i in indices:
+            box, score, class_id = boxes[i, :4], scores[i], class_ids[i]
+            arry_box.append((box, score, class_id, self.classes[class_id]))
+        return arry_box, input_image
+
 
     def xywh2xyxy(self, x):
         y = np.copy(x)
@@ -91,9 +113,16 @@ class Predict:
         y[..., 3] = x[..., 1] + x[..., 3] / 2
         return y
 
-
     def extract_boxes(self, predictions):
         boxes = predictions[:, :4]
+        boxes = self.xywh2xyxy(boxes)
+        return boxes
+
+    def extract_boxes_rescale_boxes(self,predictions):
+        boxes = predictions[:, :4]       
+        input_shape = np.array([self.input_width, self.input_height, self.input_width, self.input_height])
+        boxes = np.divide(boxes, input_shape, dtype=np.float32)
+        boxes *= np.array([ self.img_height, self.img_width ,self.img_height, self.img_width ])
         boxes = self.xywh2xyxy(boxes)
         return boxes
 
@@ -122,6 +151,17 @@ class Predict:
 
         return keep
 
+    def multiclass_nms(self, boxes, scores, class_ids, iou_threshold):
+        unique_class_ids = np.unique(class_ids)
+        selected_indices = []
+        for class_id in unique_class_ids:
+            class_mask = (class_ids == class_id)
+            class_boxes = boxes[class_mask]
+            class_scores = scores[class_mask]
+            indices = self.non_max_suppression(class_boxes, class_scores, iou_threshold)
+            selected_indices.extend(np.where(class_mask)[0][indices])
+        return np.array(selected_indices)
+
     def get_input_details(self):
         model_inputs = self.session.get_inputs()
         self.input_names = [model_inputs[i].name for i in range(len(model_inputs))]
@@ -143,18 +183,6 @@ class Predict:
         cv2.rectangle(img, (label_x, label_y - label_height), (label_x + label_width, label_y + label_height), tuple(color.tolist()), cv2.FILLED)
         cv2.putText(img, label, (label_x, label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
 
-    def draw_esp(self, hdc, box, pen):
-        # Convert the bounding box coordinates to the new coordinate system
-        x1 = box[0] + center_x - (screenshot / 2)
-        y1 = box[1] + center_y - (screenshot / 2)
-        x2 = box[2] + center_x - (screenshot / 2)
-        y2 = box[3] + center_y - (screenshot / 2)
-
-        win32gui.SelectObject(hdc, pen)
-        brush = win32gui.GetStockObject(win32con.NULL_BRUSH)
-        win32gui.SelectObject(hdc, brush)
-        win32gui.Rectangle(hdc, int(x1), int(y1), int(x2), int(y2))  # Convert to integers
-
     def get_class_names(self):
         metadata = self.session.get_modelmeta().custom_metadata_map['names']
         class_names = [item.split(": ")[1].strip(" {}'") for item in metadata.split("', ")]
@@ -169,62 +197,54 @@ class Predict:
             self.start_time = time.time()
             print(self.fps)
 
+
 class ONNX:
     def __init__(self, onnx_model, confidence_thres, iou_thres):
         self.predict_model = Predict(onnx_model, confidence_thres, iou_thres)
 
     def __call__(self, image):
-        self.results, self.images = self.predict_model.detect_objects(image)
+        #self.results, self.images = self.predict_model.detect_objects(image)    #for non resized image
+        self.results, self.images = self.predict_model.detect_objects_resize(image) #for resized image
         return self.results
 
 
 # Initialize the ONNX model
-model = ONNX(modelname, 0.52, 0.55)
-# Create a single pen for the single class
-pen_color = (0, 255, 0)  # Example color, can be any RGB color
-pen = win32gui.CreatePen(win32con.PS_SOLID, 4, win32api.RGB(*pen_color))
-hdc = win32gui.GetDC(0)
+model = ONNX(modelname, 0.95, 0.55)
 
 while True:
     img = cam.get_latest_frame()
     results = model(img)
     targets = []
 
-    for box, score, class_id, cls in results:
+    for box, score, class_id, cls in results:#
         target_x = int((box[0] + box[2]) / 2)
         target_y = int((box[1] + box[3]) / 2)
         target_height = int(box[3] - box[1])
-        targets.append((target_x, target_y,target_height))
+        targets.append((target_x, target_y, target_height))
 
     targets_array = np.array(targets)
-    if len(targets_array) > 0:       
-        # Calculate Euclidean distances between targets and center
-        #distances = np.linalg.norm(targets_array[:, :1] - center, axis=1)
-        distances = targets_array[:, :1] - center
 
+    if len(targets_array) > 0:
+        # Calculate Euclidean distances between targets and center
+        distances = np.linalg.norm(targets_array[:, :2] - (centerx,centery), axis=1)
+        #distances =np.abs(targets_array[:, :1] - center)
+        # Find the index of the nearest target
         nearest_index = np.argmin(distances)
         nearest_distance = distances[nearest_index]
         nearest_target = targets[nearest_index]
-        delta_x = int(nearest_target[0] - center)
-        delta_y = int(nearest_target[1] - center)
-        delta_y -= int(nearest_target[2]/ 2.9)
-
-        if win32api.GetKeyState(activationkey) < 0:
-            kmNet.move(int(delta_x / movespeed), int(delta_y / movespeed))
-            if -fovx <= delta_x / movespeed <= fovx and -fovy <= delta_y / movespeed <= 0.5:
-                kmNet.left(1)
-                kmNet.left(0)
-
+        delta_x = int(nearest_target[0] + centerx)
+        delta_y = int(nearest_target[1] + centery)
+        delta_y -= int(nearest_target[2] / 2.8)
 
     if visual:
-        for box, score, class_id, cls in results:
-            # Draw bounding boxes on the screen
-            model.predict_model.draw_esp(hdc, box, pen)
-            #win32gui.ReleaseDC(0, hdc)
+        for box, score, class_id, cls in results:#
+            model.predict_model.draw_detections(img, box, score, class_id)
+        cv2.imshow("Detected Objects", img)
+        cv2.waitKey(1)
+
 
     if countfps:
         model.predict_model.update_fps()
 
 cv2.destroyAllWindows()
 cam.stop()
-win32gui.DeleteObject(pen)  # Clean up the pen
