@@ -17,6 +17,26 @@ resize_dimension = 640 #dimesion for  cropped image
 saveimageevrynumframe=15 #save evry 10 frames
 ssl._create_default_https_context = ssl._create_unverified_context
 
+# Constants and Configuration
+CONFIDENCE_THRESHOLD = 0.25
+IOU_THRESHOLD = 0.5
+MAX_IMAGES = 5000
+
+# Paths and SSL Context
+ssl._create_default_https_context = ssl._create_unverified_context
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+FRAMES_PATH = os.path.join(SCRIPT_DIR, "frames_extracted")
+MANUAL_LABEL_PATH = os.path.join(SCRIPT_DIR, "manual_label")
+LABELS_PATH = os.path.join(SCRIPT_DIR, "labels")
+IMAGES_PATH = os.path.join(SCRIPT_DIR, "images")
+
+# Create necessary directories
+os.makedirs(FRAMES_PATH, exist_ok=True)
+os.makedirs(MANUAL_LABEL_PATH, exist_ok=True)
+os.makedirs(LABELS_PATH, exist_ok=True)
+os.makedirs(IMAGES_PATH, exist_ok=True)
+
+
 class Predict:
     def __init__(self, onnx_model, confidence_thres, iou_thres):
         self.confidence_thres = confidence_thres
@@ -259,6 +279,47 @@ def elimino0_50():
         if  targets:
             os.remove(image_path)
 
+def annotate_images():
+    model = ONNX(MODEL_NAME, 0.5, 0.5)
+    for filename in tqdm(os.listdir(MANUAL_LABEL_PATH)):
+        image_path = os.path.join(MANUAL_LABEL_PATH, filename)
+        image = Image.open(image_path)
+        image = np.array(image)
+        results = model(image)
+        if results:
+            annotation_lines = []
+            for box, score, class_id, cls in results:
+                if score >= 0.50:
+                    model.predict_model.draw_detections(image, box, score, class_id)
+                    x_center = (box[0] + box[2]) / 2 
+                    y_center = (box[1] + box[3]) / 2 
+                    width = (box[2] - box[0])
+                    height = (box[3] - box[1])
+                    annotation_lines.append(f"{class_id} {x_center} {y_center} {width} {height}")
+
+            # Save annotated image
+            annotated_image = Image.fromarray(image)
+            annotated_image.save(image_path)
+
+            # Save annotations to a TXT file
+            annotation_path = os.path.splitext(image_path)[0] + ".txt"
+            with open(annotation_path, "w") as f:
+                f.write("\n".join(annotation_lines))
+
+def move_0_50():
+    model = ONNX(MODEL_NAME, 0.5, 0.5)
+    for filename in tqdm(os.listdir(FRAMES_PATH)):
+        image_path = os.path.join(FRAMES_PATH, filename)
+        image = Image.open(image_path)
+        image = np.array(image)
+        results = model(image)
+        if results:
+            dest_image_path = os.path.join(MANUAL_LABEL_PATH, filename)
+            shutil.move(image_path, dest_image_path)
+            annotation_path = os.path.splitext(image_path)[0] + ".txt"
+            if os.path.exists(annotation_path):
+                dest_annotation_path = os.path.join(MANUAL_LABEL_PATH, os.path.basename(annotation_path))
+                shutil.move(annotation_path, dest_annotation_path)
 
 print('cercando video')
 findvideo()
