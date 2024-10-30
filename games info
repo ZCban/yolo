@@ -31,10 +31,19 @@ utilizando la logica del piu vicino al centro devi rendere univoca la distanza a
 esempio:
 
 #calcolo distanza euclidea normale 
-distances = np.linalg.norm(centers, axis=1)
+-distances1 = np.linalg.norm(centers, axis=1) 
+
+-Coordinate dei target e distanza dal centro ordinate dal più vicino per distances1:
+Target 1: Coordinate (110.0, 110.0), Distanza dal centro : 70.71
+Target 2: Coordinate (210.0, 210.0), Distanza dal centro : 70.71
 
 #calcola distanza euclidea + tie-breaker minimo (in questo modo tutte le distanze saranno sempre univoche come un  seriale,questo permette di utilizare sensibilita piu alte )
-distances = np.linalg.norm(centers, axis=1) + 0.00001 * centers[:, 0]
+-distances2 = np.linalg.norm(centers, axis=1) + 0.00001 * centers[:, 0]
+
+-Coordinate dei target e distanza dal centro ordinate dal più vicino per distances2:
+Target 1: Coordinate (110.0, 110.0), Distanza dal centro (con tie-breaker): 70.71068
+Target 2: Coordinate (210.0, 210.0), Distanza dal centro (con tie-breaker): 70.71278
+
 
 
 
