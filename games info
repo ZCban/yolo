@@ -24,5 +24,18 @@ Rosso brunito - HEX: #5A3E43
 Giallo ocra spento - HEX: #8D744A
 
 
+####logica bersaglio####
+
+utilizando la logica del piu vicino al centro devi rendere univoca la distanza anche se due punti risultano equidistanti
+
+esempio:
+
+#calcolo distanza euclidea normale 
+distances = np.linalg.norm(centers, axis=1)
+
+#calcola distanza euclidea + tie-breaker minimo (in questo modo tutte le distanze saranno sempre univoche come un  seriale,questo permette di utilizare sensibilita piu alte )
+distances = np.linalg.norm(centers, axis=1) + 0.00001 * centers[:, 0]
+
+
 
 
