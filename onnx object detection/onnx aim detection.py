@@ -19,18 +19,21 @@ import math
 # Example usage
 screenshot = 512
 countfps = True
-visual = False
+visual =  False                                      
 data = False
 modelname = 'best.onnx'
 aimpoint=2.8
 current_target = None
 center = screenshot / 2
+trigger=False
+
 
 # Esempio di risoluzione e FOV del gioco
 screen_width = GetSystemMetrics(0)
 screen_height = GetSystemMetrics(1)
-fov_horizontal=103  
-sensitivity = 1
+fov_horizontal=103
+sensitivity_game=0.5 #from 0.1 to 1
+sensitivity = 1.5   #from 0.1 to 20       
 
 # Screenshot
 screen_capture = mss()
@@ -96,7 +99,8 @@ class Predict:
         scores = scores[scores > self.confidence_thres]
         class_ids = np.argmax(outputs[:, 4:], axis=1)
         boxes = self.extract_boxes(outputs)
-        indices = self.non_max_suppression(boxes, scores, self.iou_thres)
+        #indices = self.non_max_suppression(boxes, scores, self.iou_thres)
+        indices = self.color_filtered_nms(boxes, scores, input_image, self.iou_thres)
         arry_box = []
         for i in indices:
             box, score, class_id = boxes[i, :4], scores[i], class_ids[i]
@@ -146,6 +150,45 @@ class Predict:
             iou = inter / union
             order = order[np.where(iou <= iou_threshold)[0] + 1]
 
+        return keep
+
+    # Funzione per filtro colore e NMS
+    def color_filtered_nms(self, boxes, scores, img, iou_threshold=0.5, violet_threshold=0.05):
+        adjusted_scores = []
+        valid_boxes = []
+        valid_scores = []
+
+
+        for box, score in zip(boxes, scores):
+            x1, y1, x2, y2 = map(int, box)
+            box_img = img[y1:y2, x1:x2]
+
+            if box_img.size == 0:
+                adjusted_scores.append(0)
+                continue
+
+            hsv_box_img = cv2.cvtColor(box_img, cv2.COLOR_BGR2HSV)
+            lower_violet = np.array([140, 70, 70])
+            upper_violet = np.array([160, 255, 255])
+            mask = cv2.inRange(hsv_box_img, lower_violet, upper_violet)
+
+            violet_pixels = cv2.countNonZero(mask)
+            total_pixels = box_img.shape[0] * box_img.shape[1]
+            violet_ratio = violet_pixels / total_pixels if total_pixels > 0 else 0
+
+            # Verifica se la box contiene sufficiente colore viola
+            if violet_ratio > violet_threshold:
+                valid_boxes.append(box)
+                valid_scores.append(score * (1 + violet_ratio))  # Punteggio aggiustato in base al viola
+
+        # Se nessun box ha soddisfatto i criteri, ritorna lista vuota
+        if not valid_boxes:
+            return []
+
+        # Converti box e punteggi validi in tensori per GPU e applica NMS
+        boxes_tensor = torch.tensor(valid_boxes, dtype=torch.float32).cuda()
+        scores_tensor = torch.tensor(valid_scores, dtype=torch.float32).cuda()
+        keep = ops.nms(boxes_tensor, scores_tensor, iou_threshold).cpu().numpy()
         return keep
 
 
@@ -201,6 +244,7 @@ class ONNX:
 
 def save_image_worker():
     while True:
+        
         # Prendi un'immagine dalla coda
         image = image_queue.get()
         
@@ -225,12 +269,12 @@ def calculate_Cx_Cy(resolution_width, resolution_height, fov_horizontal, sensiti
     fov_vertical = fov_horizontal / aspect_ratio
 
     # Calcola i pixel per grado in base alla risoluzione e al FOV
-    pixel_per_grado_x = (resolution_width / fov_horizontal) * sensitivity
-    pixel_per_grado_y = (resolution_height / fov_vertical) * sensitivity
+    pixel_per_grado_x = (resolution_width / fov_horizontal) * sensitivity_game
+    pixel_per_grado_y = (resolution_height / fov_vertical) * sensitivity_game
 
     # Risultati finali con sensibilità applicata
-    Cx = pixel_per_grado_x
-    Cy = pixel_per_grado_y
+    Cx = pixel_per_grado_x * sensitivity
+    Cy = pixel_per_grado_y * sensitivity
     
     return Cx, Cy
 
@@ -277,7 +321,7 @@ while True:
             # Se ci sono più bersagli, calcoliamo la distanza dal centro per trovare quello più vicino.
             #dist_from_center = [abs(target[0]) for target in targets_array]
             #min_dist_idx = dist_from_center.index(min(dist_from_center))
-            dist_from_center = np.linalg.norm(targets_array[:, :2], axis=1)
+            dist_from_center = np.linalg.norm(targets_array[:, :2], axis=1)+ 0.1 * targets_array[:, 0]
             min_dist_idx = np.argmin(dist_from_center)
             current_target = targets_array[min_dist_idx]
 
@@ -293,13 +337,12 @@ while True:
         step_x = int(mx)
         step_y = int(my)
 
-        # Determina lo stato desiderato in base alle condizioni
-        if -3 <= step_x <= 3 and -1 <= step_y <= 1:
+        # Determina lo stato desiderato in base alle condizioni        
+        if -2.4 <= step_x <= 2.4 and -1 <= step_y <= 1:
             kmNet.left(1)
             kmNet.left(0)
-
         # Muovi il cursore se il tasto è attivo
-        if win32api.GetKeyState(0x05) < 0:
+        if win32api.GetKeyState(0x05) :#
             kmNet.move(step_x, step_y)
            
 
@@ -328,3 +371,4 @@ while True:
 # Terminazione del thread di salvataggio in modo pulito (opzionale se il programma deve terminare)
 image_queue.put((None, None))  # Inserisce un segnale di arresto nella coda
 save_thread.join()  # Attende che il thread termini
+
