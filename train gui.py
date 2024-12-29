@@ -8,7 +8,7 @@ class YOLOTrainingGUI:
         self.master = master
         master.title("YOLO Training GUI")
 
-        self.model_options = ['yolov9c', 'yolov9e', 'yolov8n', 'yolov8s', 'yolov8m', 'yolov8l', 'yolov8x','yolov8n-seg', 'yolov8s-seg', 'yolov8m-seg', 'yolov8l-seg', 'yolov8x-seg', 'yolov6-n', 'yolov6-s', 'yolov6-m', 'yolov6-l', 'yolov6-l6', 'yolov5nu', 'yolov5su', 'yolov5mu', 'yolov5lu', 'yolov5xu']
+        self.model_options = ['yolov10n','yolov9c', 'yolov9e', 'yolov8n', 'yolov8s', 'yolov8m', 'yolov8l', 'yolov8x','yolov8n-seg', 'yolov8s-seg', 'yolov8m-seg', 'yolov8l-seg', 'yolov8x-seg', 'yolov6-n', 'yolov6-s', 'yolov6-m', 'yolov6-l', 'yolov6-l6', 'yolov5nu', 'yolov5su', 'yolov5mu', 'yolov5lu', 'yolov5xu']
         self.selected_model = tk.StringVar(value=self.model_options[0])
         self.imgsz_options = [320, 384, 448, 512, 576, 640]
         self.selected_imgsz = tk.IntVar(value=self.imgsz_options[5])
@@ -16,7 +16,7 @@ class YOLOTrainingGUI:
         self.selected_cache = tk.StringVar(value=self.boolean_options[0])
         self.selected_amp = tk.StringVar(value=self.boolean_options[1])
         self.selected_val = tk.StringVar(value=self.boolean_options[0])
-        self.batch_size_options = [-1, 2, 4, 8, 16, 32, 64]
+        self.batch_size_options = [-1, 0.70, 0.80, 0.90]
         self.selected_batch_size = tk.IntVar(value=self.batch_size_options[0])
         self.save_period_options = [-1, 2, 4, 8, 16, 32, 64]
         self.selected_save_period = tk.IntVar(value=self.save_period_options[0])
@@ -107,7 +107,7 @@ class YOLOTrainingGUI:
             model_path = f"{selected_model}.pt"
             self.model = YOLO(model_path)
 
-            results = self.model.train(data=yaml_path, epochs=epochs, batch=batch, imgsz=imgsz,
+            results = self.model.train(data=yaml_path, epochs=epochs, batch=0.85, imgsz=imgsz,
                                        cache=cache, amp=amp, val=val, save_period=save_period,
                                        workers=workers, pretrained=pretrained, single_cls=single_cls,patience=patience)
             print("Training results:", results)
@@ -135,3 +135,4 @@ if __name__ == "__main__":
     root = tk.Tk()
     gui = YOLOTrainingGUI(root)
     root.mainloop()
+
