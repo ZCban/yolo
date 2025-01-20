@@ -12,21 +12,25 @@ import sys
 import queue
 from win32api import GetSystemMetrics
 import win32api
+import threading
 
 # Configurazioni iniziali
 screenshot = 512
 fov = 380  # FOV x2
-fovaim = fov / 2
+fovaim = fov/2  # FOV aim
+fov_x = (screenshot - fov) // 2  # Calcola le coordinate del rettangolo FOV
+fov_y = (screenshot - fov) // 2  # Calcola le coordinate del rettangolo FOV
 countfps = True
 visual = True
 data = False
 modelname = 'best.onnx'
-aimpoint = 2.7
+aimpoint = 12
 center = screenshot / 2
 centerx, centery = center, center
 TARGET_FPS = 90
 FRAME_TIME = 1 / TARGET_FPS
-
+# Crea una coda per le immagini da salvare
+image_queue = queue.Queue(maxsize=10) 
 
 
 # Inizializzazione kmNet
@@ -59,6 +63,8 @@ fps = 0
 frame_count = 0
 start_time = time.time()
 last_saved_time = time.time()
+
+
 
 class Predict:
     def __init__(self, onnx_model, confidence_thres, iou_thres):
@@ -154,16 +160,12 @@ class Predict:
 
         return keep
 
-
-
     def non_max_suppression(self, boxes, scores, iou_threshold):
         boxes = torch.tensor(boxes, dtype=torch.float32)#.cuda()  # Ensure boxes are on GPU
         scores = torch.tensor(scores, dtype=torch.float32)#.cuda()  # Ensure scores are on GPU
         keep = ops.nms(boxes, scores, iou_threshold)#.cpu().numpy()
 
         return keep
-
-
 
     def get_input_details(self):
         model_inputs = self.session.get_inputs()
@@ -181,9 +183,6 @@ class Predict:
         class_names = [item.split(": ")[1].strip(" {}'") for item in metadata.split("', ")]
         return class_names
 
-    def save_image(self, image, timestamp):
-        filename = f"data/detected_{timestamp}.jpg"
-        cv2.imwrite(filename, image)
 
 
 class ONNX:
@@ -194,13 +193,33 @@ class ONNX:
         self.results, self.images = self.predict_model.detect_objects(image)
         return self.results
 
+def save_image_worker():
+    while True:
+        
+        # Prendi un'immagine dalla coda
+        image = image_queue.get()
+        
+        # Se l'elemento è None, significa che dobbiamo uscire dal thread
+        if image is None:
+            break
+
+        # Ottieni il timestamp in millisecondi
+        timestamp = int(time.time() * 1)
+
+        # Salva l'immagine
+        filename = f"data/detected_{timestamp}.jpg"
+        cv2.imwrite(filename, image)
+
+        # Segnala alla coda che il compito è stato completato
+        image_queue.task_done()
 
 class DetectionThread(QtCore.QThread):
     update_bboxes_signal = QtCore.pyqtSignal(list)
 
-    def __init__(self, model, duplicator, buffer, width, height, center, frame_time, parent=None):
+    def __init__(self, model, duplicator, buffer, width, height, center, frame_time,image_queue, parent=None):
         super().__init__(parent)
         self.model = model
+        self.image_queue = image_queue
         self.duplicator = duplicator
         self.buffer = buffer
         self.width = width
@@ -220,14 +239,13 @@ class DetectionThread(QtCore.QThread):
             results = self.model(img)
 
             #targets = []
-            targets =[
-                (((box[0] + box[2])/2 -center), (box[1]  - center +6 ))
-                for box, _, _, _ in results
-                ]
-            new_bboxes = [
-                (int((box[0] + box[2]) / 2), int((box[1] + box[3]) / 2), int(box[2] - box[0]), int(box[3] - box[1]))
-                for box, _, _, _ in results
-            ]
+            #targets =[(((box[0] + box[2])/2 -center), (box[1]  - center +6 ))for box, _, _, _ in results]
+            targets = [(((box[0] + box[2]) / 2 - center), (box[1] - center + aimpoint))for box, _, _, _ in results
+                       if -fovaim <= (box[0] + box[2]) / 2- center <= fovaim  # Controllo X
+                       and -fovaim <= (box[1] + box[3]) / 2- center + aimpoint <= fovaim ]  # Controllo Y
+
+            new_bboxes = [(int((box[0] + box[2]) / 2), int((box[1] + box[3]) / 2), int(box[2] - box[0]), int(box[3] - box[1]))for box, _, _, _ in results]
+
             #for box, score, class_id, cls in results:
                 #target_x = (box[0] + box[2])/2 -center
                 #target_y = (box[1]  - center +9 ) #box[3]) 
@@ -248,16 +266,16 @@ class DetectionThread(QtCore.QThread):
                 delta_y = current_target[1]
 
                 # Applica i valori calcolati per lo spostamento
-                step_x = int(delta_x/2)
-                step_y = int(delta_y/2)
+                step_x = int(delta_x/1.7)
+                step_y = int(delta_y/1.7)
 
 
                 if win32api.GetKeyState(0x05)<0 :
-                        kmNet.move(step_x, step_y)
-                # Determina lo stato desiderato in base alle condizioni
-                if -1.3 <= step_x <= 1.3 and -1 <= step_y <= 1:
-                    kmNet.left(1)
-                    kmNet.left(0)
+                    kmNet.move(step_x, step_y)
+                    # Determina lo stato desiderato in base alle condizioni
+                    if -1.4 <= step_x <= 1.4 and -1 <= step_y <= 1:
+                        kmNet.left(1)
+                        kmNet.left(0)
             
             self.update_bboxes_signal.emit(new_bboxes)
             frame_time = time.time() - frame_start
@@ -273,6 +291,10 @@ class DetectionThread(QtCore.QThread):
                     self.frame_count = 0
                     self.start_time = time.time()
                     print(f"FPS: {fps:.2f}")
+
+            # Aggiungi l'immagine alla coda per il salvataggio se `data` è True
+            if data:
+                image_queue.put((img))
 
     def stop(self):
         self.running = False
@@ -292,8 +314,17 @@ class OverlayWindow(QtWidgets.QWidget):
         painter = QtGui.QPainter(self)
         pen = QtGui.QPen(QtGui.QColor(255, 0, 0), 2)
         painter.setPen(pen)
-        # Draw a rectangle img size
+        font = QtGui.QFont("Arial", 8)  # Imposta il font per il testo
+        painter.setFont(font)
+
+        # Rettangolo immagine (screenshot)
         painter.drawRect(0, 0, screenshot, screenshot)
+        painter.drawText(5, 10, "Image Size")  # Testo sopra il rettangolo immagine
+
+        # Rettangolo FOV aim
+        painter.drawRect(fov_x, fov_y, fov, fov)
+        painter.drawText(fov_x + 5, fov_y - 5, "FOV Aim")  # Testo sopra il rettangolo FOV
+
         for bbox in self.bboxes:
             painter.drawRect(*bbox)
 
@@ -304,20 +335,27 @@ class OverlayWindow(QtWidgets.QWidget):
 
 if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
-
     # Inizializzazione del modello
-    model = ONNX(modelname, 0.5, 0.6)
+    model = ONNX(modelname, 0.5, 0.7)
 
     if visual:
+        
         # Creazione dell'overlay
         overlay_window = OverlayWindow()
         # Avvio del thread di rilevamento
-        detection_thread = DetectionThread(model, duplicator, buffer, screenshot, screenshot, center, FRAME_TIME)
+        detection_thread = DetectionThread(model, duplicator, buffer, screenshot, screenshot, center, FRAME_TIME,image_queue)
         detection_thread.update_bboxes_signal.connect(overlay_window.update_bboxes)
         detection_thread.start()
+
     else:
-        detection_thread = DetectionThread(model, duplicator, buffer, screenshot, screenshot, center, FRAME_TIME)
+        detection_thread = DetectionThread(model, duplicator, buffer, screenshot, screenshot, center, FRAME_TIME,image_queue)
         detection_thread.start()
+
+    # Avvia il thread di salvataggio se `data` è True
+    if data:
+        save_thread = threading.Thread(target=save_image_worker)
+        save_thread.daemon = True
+        save_thread.start()
 
     # Avvio dell'applicazione Qt
     sys.exit(app.exec_())
