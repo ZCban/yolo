@@ -10,7 +10,7 @@ import numpy as np
 import time
 
 modelname='best.onnx'
-video1_name = 'mw3'
+video1_name = 'valorant mvp'
 num_videos = 1
 # Dimensione desiderata per il ridimensionamento dei frame
 resize_dimension = 512 #dimesion for  cropped image
@@ -189,32 +189,92 @@ class ONNX:
         return self.results
 
 
-def findvideo():
+import os
+import yt_dlp
+from tqdm import tqdm
+
+def download_video():
     script_dir = os.path.dirname(__file__)
     download_path = os.path.join(script_dir, "download")
+
     if not os.path.exists(download_path):
         os.makedirs(download_path)
+
     log_file = os.path.join(script_dir, "log.txt")
+
     if os.path.isfile(log_file):
-        with open(log_file, "r") as f:
+        with open(log_file, "r", encoding="utf-8") as f:
             downloaded_files = f.read().splitlines()
     else:
         downloaded_files = []
 
-    video_list = pytube.Search(video1_name).results
-    while not video_list:
-        print("Nessun video trovato con il nome specificato")
-        return
-    video_list = [v for v in video_list if v.title not in downloaded_files]
-    video_list = video_list[:num_videos]
+    ydl_opts = {
+        "quiet": False,
+        "outtmpl": f"{download_path}/%(title)s.%(ext)s",
+        "format": "bestvideo+bestaudio/best",
+        "noplaylist": True,
+        "skip_download": True,  # Fetch info first, then download selected videos
+    }
 
-    for video1 in tqdm(video_list, desc="Download progress", unit="video"):
-        yt = pytube.YouTube(video1.watch_url)
-        #stream = yt.streams.filter(progressive=True, file_extension="mp4").order_by('resolution').desc().first()
-        stream = yt.streams.get_highest_resolution()
-        stream.download(download_path)
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(video1.title + "\n")
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        try:
+            search_results = ydl.extract_info(f"ytsearch{num_videos * 100}:{video1_name}", download=False)
+
+            if not search_results or "entries" not in search_results:
+                print("❌ Nessun video trovato.")
+                return
+
+            # Apply filtering
+            filtered_videos = []
+            for video in search_results["entries"]:
+                try:
+                    video_duration = video.get("duration", 0)
+                    if video["title"] in downloaded_files:
+                        continue  # Skip already downloaded videos
+                    if video_duration < 60 or video_duration > 400:  
+                        continue  # Skip videos shorter than 60s or longer than 15min
+                    filtered_videos.append(video)
+                except KeyError:
+                    continue  # Skip videos without proper metadata
+
+            filtered_videos = filtered_videos[:num_videos]  # Get only required number
+
+            if not filtered_videos:
+                print("❌ Nessun video valido trovato dopo il filtraggio.")
+                return
+
+            ydl_opts["skip_download"] = False  # Now enable downloads
+
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                for video in tqdm(filtered_videos, desc="Download progress", unit="video"):
+                    try:
+                        ydl.download([video["webpage_url"]])
+                        with open(log_file, "a", encoding="utf-8") as f:
+                            f.write(video["title"] + "\n")
+                        print(f"✅ Video scaricato: {video['title']} ({video['duration']} sec)")
+                    except Exception as e:
+                        print(f"❌ Errore nel download di {video['title']}: {e}")
+        except Exception as e:
+            print(f"❌ Errore durante la ricerca dei video: {e}")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+import os
+import cv2
+import shutil
+from tqdm import tqdm  # ✅ Import tqdm for progress bar
 
 def video_to_frame(target_size, frames_to_skip=100):
     videos_folder = "download"
@@ -222,90 +282,62 @@ def video_to_frame(target_size, frames_to_skip=100):
     os.makedirs(videos_folder, exist_ok=True)
     os.makedirs(frames_folder, exist_ok=True)
 
-    processed_videos = 0
     video_files = [filename for filename in os.listdir(videos_folder) if filename.endswith((".mp4", ".avi"))]
-    total_videos = len(video_files)
+
+    if not video_files:
+        print("❌ No video files found in 'download' folder.")
+        return
 
     for filename in video_files:
         video_path = os.path.join(videos_folder, filename)
         video = cv2.VideoCapture(video_path)
 
+        if not video.isOpened():
+            print(f"❌ Error opening video file: {filename}")
+            continue
+
         frame_width = int(video.get(cv2.CAP_PROP_FRAME_WIDTH))
         frame_height = int(video.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        total_frames = int(video.get(cv2.CAP_PROP_FRAME_COUNT))
+
         frame_size = min(frame_width, frame_height, target_size)
         x = int(frame_width / 2 - frame_size / 2)
         y = int(frame_height / 2 - frame_size / 2)
 
         frames_extracted = 0
         frame_count = 0
-        while True:
-            success, frame = video.read()
-            if not success:
-                break
 
-            frame_count += 1
-            if frame_count % frames_to_skip == 0:
-                cropped_frame = frame[y:y+frame_size, x:x+frame_size]
-                resized_frame = cv2.resize(cropped_frame, (target_size, target_size))
-                frame_name = os.path.join(frames_folder, f"{os.path.splitext(filename)[0]}_{frames_extracted}.jpg")
-                cv2.imwrite(frame_name, resized_frame)
-                frames_extracted += 1
+        print(f"🔄 Processing video: {filename} ({total_frames} total frames)")
 
-            progress = int(frames_extracted / total_videos * 100)
-            print(frames_extracted)
+        with tqdm(total=total_frames, desc=f"Extracting frames from {filename}", unit="frame") as pbar:
+            while True:
+                success, frame = video.read()
+                if not success:
+                    break  # Stop reading if the video ends
+
+                if frame_count % frames_to_skip == 0:
+                    try:
+                        cropped_frame = frame[y:y+frame_size, x:x+frame_size]
+                        resized_frame = cv2.resize(cropped_frame, (target_size, target_size))
+                        frame_name = os.path.join(frames_folder, f"{os.path.splitext(filename)[0]}_{frames_extracted}.jpg")
+                        cv2.imwrite(frame_name, resized_frame)
+                        frames_extracted += 1
+                    except Exception as e:
+                        print(f"⚠️ Error processing frame {frame_count} of {filename}: {e}")
+
+                frame_count += 1
+                pbar.update(1)  # ✅ Update progress bar for each frame processed
 
         video.release()
-        processed_videos += 1
+        
+        if frames_extracted > 0:
+            os.remove(video_path)  # ✅ Only delete video if at least one frame was extracted
+            print(f"✅ Processed & deleted: {filename} (Frames Extracted: {frames_extracted})")
+        else:
+            print(f"❌ No frames extracted from {filename}, skipping deletion.")
 
-    shutil.rmtree(videos_folder)
     cv2.destroyAllWindows()
 
-
-def mantieni0_35():
-    # Initialize the model
-    model = ONNX(modelname, 0.35, 0.5)
-    
-    # Define the input folder
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    input_folder = os.path.join(script_dir, "frames_extracted")
-    
-    # Check if input folder exists and is not empty
-    if not os.path.exists(input_folder) or not os.listdir(input_folder):
-        print(f"No files found in {input_folder}")
-        return
-
-    # Process each file in the input folder
-    for filename in tqdm(os.listdir(input_folder)):
-        image_path = os.path.join(input_folder, filename)
-        
-        try:
-            # Open and preprocess the image
-            image = Image.open(image_path)
-            image_np = np.array(image)
-            
-            # Run the model on the image
-            results = model(image_np)
-            targets = []
-            
-            # Loop through the prediction results
-            for box, score, class_id, cls in results:
-                target_x = int((box[0] + box[2]) / 2)
-                target_y = int((box[1] + box[3]) / 2)
-                target_height = int(box[3] - box[1])
-                targets.append((target_x, target_y, target_height))
-
-            # Remove the image if no targets are found
-            if not targets:
-                os.remove(image_path)
-                
-        except:
-            # Remove the image if it is corrupted or any other error occurs
-            if os.path.exists(image_path):
-                try:
-                    os.remove(image_path)
-                    print(f"Removed corrupted or problematic image: {filename} - {e}")
-                except PermissionError as pe:
-                    print(f"Could not remove image {filename} due to permission error: {pe}")
 
 def elimino0_50():
     model = ONNX(modelname, 0.5, 0.5)
@@ -330,31 +362,39 @@ def elimino0_50():
             os.remove(image_path)
 
 def annotate_images():
-    model = ONNX(modelname, 0.5, 0.5)
-    for filename in tqdm(os.listdir(MANUAL_LABEL_PATH)):
+    model = ONNX(modelname, 0.5, 0.5)  # Modello con threshold di 0.5
+    for filename in tqdm(os.listdir(MANUAL_LABEL_PATH), desc="Annotating images"):
         image_path = os.path.join(MANUAL_LABEL_PATH, filename)
-        image = Image.open(image_path)
-        image = np.array(image)
+
+        try:
+            image = Image.open(image_path).convert("RGB")  # Conversione in RGB per evitare errori
+            image = np.array(image)
+        except Exception as e:
+            print(f"❌ Errore nell'aprire l'immagine {filename}: {e}")
+            continue  # Salta le immagini corrotte
+
         results = model(image)
-        if results:
-            annotation_lines = []
-            for box, score, class_id, cls in results:
-                if score >= 0.50:
-                    model.predict_model.draw_detections(image, box, score, class_id)
-                    x_center = (box[0] + box[2]) / 2 
-                    y_center = (box[1] + box[3]) / 2 
-                    width = (box[2] - box[0])
-                    height = (box[3] - box[1])
-                    annotation_lines.append(f"{class_id} {x_center} {y_center} {width} {height}")
+        annotation_lines = []
 
-            # Save annotated image
-            #annotated_image = Image.fromarray(image)
-            #annotated_image.save(image_path)
+        for box, score, class_id, cls in results:
+            if score >= 0.50:
+                model.predict_model.draw_detections(image, box, score, class_id)
 
-            # Save annotations to a TXT file
-            annotation_path = os.path.splitext(image_path)[0] + ".txt"
+                # Calcolo delle coordinate normalizzate
+                img_width, img_height = image.shape[1], image.shape[0]
+                x_center = ((box[0] + box[2]) / 2) / img_width
+                y_center = ((box[1] + box[3]) / 2) / img_height
+                width = (box[2] - box[0]) / img_width
+                height = (box[3] - box[1]) / img_height
+
+                # Assicuriamoci che i valori siano float con 6 decimali per il formato YOLO
+                annotation_lines.append(f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}")
+
+        if annotation_lines:
+            annotation_path = os.path.join(LABELS_PATH, os.path.splitext(filename)[0] + ".txt")
             with open(annotation_path, "w") as f:
                 f.write("\n".join(annotation_lines))
+
 
 def move_0_50():
     model = ONNX(modelname, 0.5, 0.5)
@@ -390,15 +430,177 @@ def remove_corrupted_images():
             print(f"Deleting corrupted image: {image_path} due to {e}")
             os.remove(image_path)
 
+
+
+import shutil
+import numpy as np
+
+def compare_annotations():
+    """
+    Confronta le annotazioni manuali con quelle generate dal modello.
+    Se il modello ha rilevato meno oggetti, più oggetti o ha sbagliato classe/coordinate,
+    sposta l'immagine nella cartella 'controlla/da_correggere/' per revisione manuale.
+    """
+    control_images_folder = os.path.join(SCRIPT_DIR, "controlla", "images")  # Immagini annotate automaticamente
+    control_labels_folder = os.path.join(SCRIPT_DIR, "controlla", "labels")  # Label manuali
+    correction_folder = os.path.join(SCRIPT_DIR, "controlla", "da_correggere")  # Immagini con errori
+
+    os.makedirs(correction_folder, exist_ok=True)
+
+    for filename in tqdm(os.listdir(control_labels_folder), desc="Comparing annotations"):
+        if not filename.endswith(".txt"):
+            continue  # Salta i file non di annotazione
+
+        manual_annotation_path = os.path.join(control_labels_folder, filename)
+        auto_annotation_path = os.path.join(LABELS_PATH, filename)
+
+        # Se manca l'annotazione automatica, l'immagine è errata e va spostata
+        if not os.path.exists(auto_annotation_path):
+            print(f"⚠️ Annotazione automatica mancante per {filename}, spostando in 'da_correggere'")
+            image_path = os.path.join(control_images_folder, filename.replace(".txt", ".jpg"))
+            if os.path.exists(image_path):
+                shutil.move(image_path, os.path.join(correction_folder, os.path.basename(image_path)))
+            continue
+
+        # Legge le annotazioni
+        with open(manual_annotation_path, "r") as f:
+            manual_labels = [line.strip() for line in f.readlines()]
+
+        with open(auto_annotation_path, "r") as f:
+            auto_labels = [line.strip() for line in f.readlines()]
+
+        # Se il numero di oggetti non coincide, l'immagine è errata
+        if len(manual_labels) != len(auto_labels):
+            print(f"🚨 Differenza nel numero di oggetti per {filename}, spostando in 'da_correggere'")
+            image_path = os.path.join(control_images_folder, filename.replace(".txt", ".jpg"))
+            if os.path.exists(image_path):
+                shutil.move(image_path, os.path.join(correction_folder, os.path.basename(image_path)))
+            continue
+
+        # Confronto dettagliato: verifica classi e coordinate
+        manual_data = [list(map(float, label.split())) for label in manual_labels]
+        auto_data = [list(map(float, label.split())) for label in auto_labels]
+
+        for manual_obj, auto_obj in zip(manual_data, auto_data):
+            manual_class, *manual_coords = manual_obj
+            auto_class, *auto_coords = auto_obj
+
+            # Se la classe è diversa, è un errore
+            if manual_class != auto_class:
+                print(f"❌ Classe diversa per {filename}, spostando in 'da_correggere'")
+                image_path = os.path.join(control_images_folder, filename.replace(".txt", ".jpg"))
+                if os.path.exists(image_path):
+                    shutil.move(image_path, os.path.join(correction_folder, os.path.basename(image_path)))
+                break
+
+            # Se le coordinate differiscono troppo, è un errore
+            manual_coords = np.array(manual_coords)
+            auto_coords = np.array(auto_coords)
+            if np.linalg.norm(manual_coords - auto_coords) > 0.1:  # Soglia di errore
+                print(f"⚠️ Coordinate diverse per {filename}, spostando in 'da_correggere'")
+                image_path = os.path.join(control_images_folder, filename.replace(".txt", ".jpg"))
+                if os.path.exists(image_path):
+                    shutil.move(image_path, os.path.join(correction_folder, os.path.basename(image_path)))
+                break
+
+    print("✅ Confronto delle annotazioni completato!")
+
+import cv2
+import numpy as np
+import os
+import shutil
+
+def resize_images_and_check_labels():
+    """
+    Ridimensiona le immagini da 640x640 a 512x512 e verifica le annotazioni YOLO.
+    Se ci sono bounding box oltre il limite 512x512, elimina l'immagine e il file di annotazione.
+    """
+    input_images_folder = os.path.join(SCRIPT_DIR, "controlla", "images")  # Cartella delle immagini
+    input_labels_folder = os.path.join(SCRIPT_DIR, "controlla", "labels")  # Cartella delle label
+    output_images_folder = os.path.join(SCRIPT_DIR, "controlla", "resized_images")  # Cartella per immagini corrette
+    output_labels_folder = os.path.join(SCRIPT_DIR, "controlla", "resized_labels")  # Cartella per label corrette
+
+    os.makedirs(output_images_folder, exist_ok=True)
+    os.makedirs(output_labels_folder, exist_ok=True)
+
+    target_size = 512  # Nuova dimensione dell'immagine
+
+    for filename in os.listdir(input_images_folder):
+        if not filename.endswith(".jpg") and not filename.endswith(".png"):
+            continue  # Salta i file che non sono immagini
+
+        image_path = os.path.join(input_images_folder, filename)
+        label_path = os.path.join(input_labels_folder, filename.replace(".jpg", ".txt").replace(".png", ".txt"))
+
+        # Carica e ridimensiona l'immagine
+        image = cv2.imread(image_path)
+        if image is None:
+            print(f"❌ Errore nel caricamento di {filename}, saltato.")
+            continue
+
+        original_size = image.shape[:2]  # (altezza, larghezza)
+        image_resized = cv2.resize(image, (target_size, target_size), interpolation=cv2.INTER_AREA)
+
+        if not os.path.exists(label_path):
+            print(f"⚠️ Nessuna annotazione per {filename}, solo ridimensionato e salvato.")
+            cv2.imwrite(os.path.join(output_images_folder, filename), image_resized)
+            continue
+
+        # Legge e aggiorna le annotazioni YOLO
+        with open(label_path, "r") as f:
+            labels = [line.strip() for line in f.readlines()]
+
+        updated_labels = []
+        for label in labels:
+            parts = label.split()
+            class_id = parts[0]
+            x_center, y_center, width, height = map(float, parts[1:])
+
+            # Converti le coordinate da YOLO (0-1) a pixel
+            x_center *= original_size[1]  # larghezza originale
+            y_center *= original_size[0]  # altezza originale
+            width *= original_size[1]
+            height *= original_size[0]
+
+            # Scala le coordinate in base alla nuova dimensione (512x512)
+            x_center = (x_center / original_size[1]) * target_size
+            y_center = (y_center / original_size[0]) * target_size
+            width = (width / original_size[1]) * target_size
+            height = (height / original_size[0]) * target_size
+
+            # Normalizza di nuovo in YOLO format
+            x_center /= target_size
+            y_center /= target_size
+            width /= target_size
+            height /= target_size
+
+            # Se il box è fuori dai limiti, scarta l'immagine
+            if x_center - width / 2 < 0 or x_center + width / 2 > 1 or y_center - height / 2 < 0 or y_center + height / 2 > 1:
+                print(f"🚨 Bounding box fuori dai limiti in {filename}, eliminato!")
+                os.remove(image_path)  # Elimina l'immagine originale
+                os.remove(label_path)  # Elimina il file di annotazione
+                break  # Passa alla prossima immagine
+
+            # Se il box è valido, lo aggiungiamo alla lista delle annotazioni aggiornate
+            updated_labels.append(f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}")
+
+        # Se ci sono bounding box validi, salva l'immagine e l'annotazione aggiornata
+        if updated_labels:
+            cv2.imwrite(os.path.join(output_images_folder, filename), image_resized)
+            with open(os.path.join(output_labels_folder, filename.replace(".jpg", ".txt").replace(".png", ".txt")), "w") as f:
+                f.write("\n".join(updated_labels))
+
+    print("✅ Processo di ridimensionamento e controllo completato!")
+
+
+
+
+
+#download_video()
 #video_to_frame(target_size=512, frames_to_skip=30)
 #remove_corrupted_images()
-#mantieni0_35()
 #move_0_50()
-#annotate_images()
-
-elimino0_50()
-
-
-
-
-
+annotate_images()
+#elimino0_50()
+#resize_images_and_check_labels()
+compare_annotations()
