@@ -1,7 +1,7 @@
 import onnxruntime as ort
 import cv2
 import numpy as np
-import kmNet
+#import kmNet
 from mss import mss
 import win32api
 import win32gui
@@ -19,7 +19,7 @@ import math
 # Example usage
 screenshot = 512
 countfps = True
-visual =  True                                     
+visual =  True                                    
 data = False
 modelname = 'best.onnx'
 aimpoint=3.3
@@ -32,7 +32,7 @@ trigger=False
 screen_width = GetSystemMetrics(0)
 screen_height = GetSystemMetrics(1)
 fov_horizontal=90
-sensitivity_game=0.6 #from 0.1 to 1
+sensitivity_game=0.3 #from 0.1 to 1
   
 
 # Screenshot
@@ -49,7 +49,7 @@ if not os.path.exists('data'):
     os.makedirs('data')
 
 # Setup kmNet
-kmNet.init('192.168.2.188', '1408', '9FC05414')
+#kmNet.init('192.168.2.188', '1408', '9FC05414')
 
 class Predict:
     def __init__(self, onnx_model, confidence_thres, iou_thres):
@@ -69,7 +69,7 @@ class Predict:
 
 
     def detect_objects_resize(self, image):
-        self.img_height, self.img_width = 1080,1080
+        self.img_height, self.img_width = 320,320
         resized_image = cv2.resize(image, (512, 512))
         input_tensor = self.preprocess(resized_image)
         outputs = self.inference(input_tensor)
@@ -147,145 +147,10 @@ class Predict:
         return boxes
 
 
-
-    # Funzione per filtro colore e NMS
-    def nms_valo(self, boxes, scores, img, iou_threshold=0.5, violet_threshold=0.05):
-        adjusted_scores = []
-        valid_boxes = []
-        valid_scores = []
-
-
-        for box, score in zip(boxes, scores):
-            x1, y1, x2, y2 = map(int, box)
-            box_img = img[y1:y2, x1:x2]
-
-            if box_img.size == 0:
-                adjusted_scores.append(0)
-                continue
-
-            hsv_box_img = cv2.cvtColor(box_img, cv2.COLOR_BGR2HSV)
-            lower_violet = np.array([140, 70, 70])
-            upper_violet = np.array([160, 255, 255])
-            mask = cv2.inRange(hsv_box_img, lower_violet, upper_violet)
-
-            violet_pixels = cv2.countNonZero(mask)
-            total_pixels = box_img.shape[0] * box_img.shape[1]
-            violet_ratio = violet_pixels / total_pixels if total_pixels > 0 else 0
-
-            # Verifica se la box contiene sufficiente colore viola
-            if violet_ratio > violet_threshold:
-                valid_boxes.append(box)
-                valid_scores.append(score * (1 + violet_ratio))  # Punteggio aggiustato in base al viola
-
-        # Se nessun box ha soddisfatto i criteri, ritorna lista vuota
-        if not valid_boxes:
-            return []
-
-        # Converti box e punteggi validi in tensori per GPU e applica NMS
-        boxes_tensor = torch.tensor(valid_boxes, dtype=torch.float32).cuda()
-        scores_tensor = torch.tensor(valid_scores, dtype=torch.float32).cuda()
-        keep = ops.nms(boxes_tensor, scores_tensor, iou_threshold).cpu().numpy()
-        return keep
-
-    def nms_cod(self, boxes, scores, img, iou_threshold=0.5):
-        valid_boxes = []
-        valid_scores = []
-
-        for box, score in zip(boxes, scores):
-            x1, y1, x2, y2 = map(int, box)
-
-            # Calcola l'offset come metà dell'altezza del bounding box
-            box_height = y2 - y1
-            offset = box_height // 2  # Arrotondato per eccesso
-
-            # Definizione dell'area sopra il box
-            x1_top = max(0, x1)
-            y1_top = max(0, y1 - offset)  # Area sopra il bounding box
-            x2_top = min(img.shape[1], x2)
-            y2_top = y1  # Fine dell'area sopra il box
-
-            # Ritaglio dell'area sopra il bounding box
-            top_area_img = img[y1_top:y2_top, x1_top:x2_top]
-
-            if top_area_img.size == 0:
-                continue
-
-            # Definizione delle maschere per il colore 
-            lower_green = np.array([92, 230, 92])  # Modifica in base alla tonalità desiderata
-            upper_green = np.array([130, 255, 130])  # Modifica in base alla tonalità desiderata
-
-            # Crea maschera per rilevare il colore 
-            mask = cv2.inRange(top_area_img, lower_green, upper_green)
-
-            # Verifica se ci sono pixel del colore specificato
-            if cv2.countNonZero(mask) > 0:
-                score = 0.30
-            else:
-                valid_boxes.append(box)
-                valid_scores.append(score)
-
-        # Se nessun box ha soddisfatto i criteri, ritorna lista vuota
-        if not valid_boxes:
-            return []
-
-        # Converti box e punteggi validi in tensori per GPU e applica NMS
-        boxes_tensor = torch.tensor(valid_boxes, dtype=torch.float32).cuda()
-        scores_tensor = torch.tensor(valid_scores, dtype=torch.float32).cuda()
-        keep = ops.nms(boxes_tensor, scores_tensor, iou_threshold).cpu().numpy()
-        return keep
-
-
-    def nms_fortnite(self, boxes, scores, img, iou_threshold=0.5, white_threshold=0.05):
-        adjusted_scores = []
-        valid_boxes = []
-        valid_scores = []
-
-        for box, score in zip(boxes, scores):
-            x1, y1, x2, y2 = map(int, box)
-
-            # Calcola l'area sopra la bounding box
-            top_y1 = max(0, y1 - 15)
-            top_y2 = y1
-            white_area_img = img[top_y1:top_y2, x1:x2]
-
-            # Verifica se l'area sopra la box è valida
-            if white_area_img.size == 0:
-                adjusted_scores.append(0)
-                continue
-
-            # Converti l'area sopra la box in HSV per rilevare il bianco
-            hsv_white_area_img = cv2.cvtColor(white_area_img, cv2.COLOR_BGR2HSV)
-            # Range di colore per bianco in HSV (alta intensità e bassa saturazione)
-            lower_white = np.array([0, 0, 200])
-            upper_white = np.array([180, 55, 255])
-
-            # Crea una maschera per rilevare i pixel bianchi
-            white_mask = cv2.inRange(hsv_white_area_img, lower_white, upper_white)
-
-            # Calcola la proporzione di pixel bianchi rispetto al totale
-            white_pixels = cv2.countNonZero(white_mask)
-            total_pixels = white_area_img.shape[0] * white_area_img.shape[1]
-            white_ratio = white_pixels / total_pixels if total_pixels > 0 else 0
-
-            # Verifica se l'area sopra la box contiene sufficiente colore bianco
-            if white_ratio > white_threshold:
-                valid_boxes.append(box)
-                valid_scores.append(score * (1 + white_ratio))  # Punteggio aggiustato in base al bianco
-
-        # Se nessuna box ha soddisfatto i criteri, ritorna lista vuota
-        if not valid_boxes:
-            return []
-
-        # Converti box e punteggi validi in tensori per GPU e applica NMS
-        boxes_tensor = torch.tensor(valid_boxes, dtype=torch.float32).cuda()
-        scores_tensor = torch.tensor(valid_scores, dtype=torch.float32).cuda()
-        keep = ops.nms(boxes_tensor, scores_tensor, iou_threshold).cpu().numpy()
-        return keep
-
     def non_max_suppression(self, boxes, scores, iou_threshold):
-        boxes = torch.tensor(boxes, dtype=torch.float32).cuda()  # Ensure boxes are on GPU
-        scores = torch.tensor(scores, dtype=torch.float32).cuda()  # Ensure scores are on GPU
-        keep = ops.nms(boxes, scores, iou_threshold).cpu().numpy()  # Return to CPU for further processing
+        boxes = torch.tensor(boxes, dtype=torch.float32)#.cuda()  # Ensure boxes are on GPU
+        scores = torch.tensor(scores, dtype=torch.float32)#.cuda()  # Ensure scores are on GPU
+        keep = ops.nms(boxes, scores, iou_threshold)#.cpu().numpy()  # Return to CPU for further processing
         return keep
 
 
@@ -352,21 +217,6 @@ def save_image_worker():
         # Segnala alla coda che il compito è stato completato
         image_queue.task_done()
 
-# Funzione per calcolare Cx e Cy basati su risoluzione e FOV
-def calculate_Cx_Cy(resolution_width, resolution_height, fov_horizontal):
-    # Calcola il FOV verticale in base al rapporto d'aspetto
-    aspect_ratio = resolution_width / resolution_height
-    fov_vertical = fov_horizontal / aspect_ratio
-
-    # Calcola i pixel per grado in base alla risoluzione e al FOV
-    pixel_per_grado_x = (resolution_width / fov_horizontal) * sensitivity_game
-    pixel_per_grado_y = (resolution_height / fov_vertical) * sensitivity_game
-
-    # Risultati finali con sensibilità applicata
-    Cx = pixel_per_grado_x 
-    Cy = pixel_per_grado_y 
-    
-    return Cx, Cy
 
 # Initialize the ONNX model
 model = ONNX(modelname, 0.49, 0.5)
@@ -374,8 +224,7 @@ model = ONNX(modelname, 0.49, 0.5)
 # Crea una coda per le immagini da salvare
 image_queue = queue.Queue()
 
-# Calcola i corretti valori di Cx e Cy in base alla risoluzione e al FOV
-Cx, Cy = calculate_Cx_Cy(screen_width, screen_height, fov_horizontal)
+
 
 # Variables for FPS calculation
 fps = 0
@@ -390,7 +239,6 @@ if data:
 
 while True:
     img1 = np.array(screen_capture.grab(screen_region))
-    #img1 = cv2.resize(img1, (512, 512)) 
     img = img1[:, :, :3]
     results = model(img)
     targets = []
@@ -410,33 +258,27 @@ while True:
             current_target = targets_array[0]
         else:
             # Se ci sono più bersagli, calcoliamo la distanza dal centro per trovare quello più vicino aggiungi valore fisso per rendere distanze univoche.
-            dist_from_center = np.linalg.norm(targets_array[:, :2], axis=1)+ 0.1 * targets_array[:, 0]
+            dist_from_center = np.linalg.norm(targets_array, axis=1)
             min_dist_idx = np.argmin(dist_from_center)
-            current_target = targets_array[min_dist_idx]
+            if current_target is None or dist_from_center[min_dist_idx] > 0.1:
+                current_target = targets_array[min_dist_idx]
 
         # Ottieni le coordinate del bersaglio rispetto al centro dello schermo
         delta_x = current_target[0]
         delta_y = current_target[1]
 
-        # Calcola la velocità (speed)
-        mx = math.atan2(delta_x, Cx) * Cx
-        my = math.atan2(delta_y, math.sqrt(delta_x ** 2 + Cx ** 2)) * Cy
+
 
         # Applica i valori calcolati per lo spostamento
         step_x = int(delta_x)
         step_y = int(delta_y)
 
-        # Determina lo stato desiderato in base alle condizioni        
-        if -5 <= step_x <= 5 and -2 <= step_y <= 2:
-            kmNet.left(1)
-            kmNet.left(0)
-        # Muovi il cursore se il tasto è attivo
-        if win32api.GetKeyState(0x05)<0 :#
-            kmNet.move(step_x, step_y)
+        if visual:
+            # Disegna il pallino giallo sul bersaglio
+            target_x = int(center + delta_x)
+            target_y = int(center + delta_y)
+            cv2.circle(img1, (target_x, target_y), 2, (0, 255, 255), -1)  # Giallo (BGR: 0,255,255)
 
-           
-
-    # Aggiungi l'immagine alla coda per il salvataggio se `data` è True
     if data:
         image_queue.put((img))
 
