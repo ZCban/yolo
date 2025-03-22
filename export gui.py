@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 from ultralytics import YOLO
 
 class YOLOExportGUI:
@@ -9,7 +9,7 @@ class YOLOExportGUI:
 
         self.export_format_options = ['torchscript', 'onnx', 'openvino', 'engine', 'coreml', 'pb', 'tflite']
         self.selected_export_format = tk.StringVar(value='torchscript')
-        self.imgsz = tk.StringVar(value="640")
+        self.imgsz = tk.StringVar(value="640")  # Valore predefinito, verrà aggiornato automaticamente
         self.keras = tk.BooleanVar(value=False)
         self.optimize = tk.BooleanVar(value=False)
         self.half = tk.BooleanVar(value=False)
@@ -37,14 +37,12 @@ class YOLOExportGUI:
     def create_export_dropdown(self, label_text, variable, options):
         label = tk.Label(self.master, text=label_text)
         label.pack()
-
         dropdown = tk.OptionMenu(self.master, variable, *options)
         dropdown.pack()
 
     def create_entry(self, label_text, variable, width, font=None, bg=None):
         label = tk.Label(self.master, text=label_text)
         label.pack()
-
         entry = tk.Entry(self.master, textvariable=variable, width=width, font=font, bg=bg)
         entry.pack()
 
@@ -57,32 +55,49 @@ class YOLOExportGUI:
         button.pack()
 
     def browse_model_path(self):
-        file_path = filedialog.askopenfilename(filetypes=[("PT files", "*.pt")])
+        file_path = filedialog.askopenfilename(filetypes=[("YOLO PT files", "*.pt")])
         if file_path:
             self.model_path.set(file_path)
+            self.load_model_info(file_path)  # Auto-rileva imgsz
+
+    def load_model_info(self, model_path):
+        try:
+            model = YOLO(model_path)
+            train_imgsz = model.overrides.get("imgsz", None)  # Legge la dimensione usata per il training
+            if train_imgsz:
+                self.imgsz.set(str(train_imgsz))
+                print(f"Dimensione di addestramento rilevata: {train_imgsz}")
+            else:
+                print("Impossibile rilevare la dimensione di addestramento.")
+        except Exception as e:
+            messagebox.showerror("Errore", f"Errore nel caricamento del modello: {str(e)}")
 
     def export_model(self):
         model_path = self.model_path.get()
         if model_path:
-            model = YOLO(model_path)
-            kwargs = {
-                "format": self.selected_export_format.get(),
-                "imgsz": eval(self.imgsz.get()),
-                "optimize": self.optimize.get(),
-                "half": self.half.get(),
-                "int8": self.int8.get(),
-                "dynamic": self.dynamic.get(),
-                "simplify": self.simplify.get(),
-                "nms": self.nms.get(),
-                "keras": self.keras.get()
-            }
-            model.export(**kwargs)
-            export_path = model_path.replace('.pt', f'.{kwargs["format"]}')
-            print(f"Model exported in {kwargs['format']} format to {export_path}")
+            try:
+                model = YOLO(model_path)
+                kwargs = {
+                    "format": self.selected_export_format.get(),
+                    "imgsz": eval(self.imgsz.get()),  # Converti in int o tuple
+                    "optimize": self.optimize.get(),
+                    "half": self.half.get(),
+                    "int8": self.int8.get(),
+                    "dynamic": self.dynamic.get(),
+                    "simplify": self.simplify.get(),
+                    "nms": self.nms.get(),
+                    "keras": self.keras.get()
+                }
+                model.export(**kwargs)
+                export_path = model_path.replace('.pt', f'.{kwargs["format"]}')
+                messagebox.showinfo("Esportazione Completata", f"Modello esportato in {kwargs['format']} a {export_path}")
+            except Exception as e:
+                messagebox.showerror("Errore di Esportazione", f"Errore durante l'esportazione: {str(e)}")
         else:
-            print("Please select a model file.")
+            messagebox.showwarning("Attenzione", "Seleziona un file del modello prima di esportare.")
 
 if __name__ == "__main__":
     root = tk.Tk()
     gui = YOLOExportGUI(root)
     root.mainloop()
+
