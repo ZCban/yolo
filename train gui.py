@@ -2,13 +2,23 @@ import tkinter as tk
 from tkinter import filedialog
 from tkinter.font import Font
 from ultralytics import YOLO
+import pandas as pd
 
 class YOLOTrainingGUI:
     def __init__(self, master):
         self.master = master
         master.title("YOLO Training GUI")
-
-        self.model_options = ['yolov10n','yolov9c', 'yolov9e', 'yolov8n', 'yolov8s', 'yolov8m', 'yolov8l', 'yolov8x','yolov8n-seg', 'yolov8s-seg', 'yolov8m-seg', 'yolov8l-seg', 'yolov8x-seg', 'yolov6-n', 'yolov6-s', 'yolov6-m', 'yolov6-l', 'yolov6-l6', 'yolov5nu', 'yolov5su', 'yolov5mu', 'yolov5lu', 'yolov5xu']
+        ### model tipe ###
+        self.model_options = [            
+            'yolo12n', 'yolo12s', 'yolo12m', 'yolo12l', 'yolo12x',
+            'yolo11n', 'yolo11s', 'yolo11m', 'yolo11l', 'yolo11x',
+            'yolov9t', 'yolov9s', 'yolov9m', 'yolov9c', 'yolov9e',
+            'yolov8n', 'yolov8s', 'yolov8m', 'yolov8l', 'yolov8x',
+            'yolov6-n', 'yolov6-s', 'yolov6-m', 'yolov6-l', 'yolov6-l6',
+            'yolov5nu', 'yolov5su', 'yolov5mu', 'yolov5lu', 'yolov5xu'
+            'yolov3u', 'yolov3-tinyu', 'yolov3-sppu'
+        ]
+        
         self.selected_model = tk.StringVar(value=self.model_options[0])
         self.imgsz_options = [320, 384, 448, 512, 576, 640]
         self.selected_imgsz = tk.IntVar(value=self.imgsz_options[5])
@@ -16,20 +26,19 @@ class YOLOTrainingGUI:
         self.selected_cache = tk.StringVar(value=self.boolean_options[0])
         self.selected_amp = tk.StringVar(value=self.boolean_options[1])
         self.selected_val = tk.StringVar(value=self.boolean_options[0])
-        self.batch_size_options = [-1, 0.70, 0.80, 0.90]
-        self.selected_batch_size = tk.IntVar(value=self.batch_size_options[0])
+        self.batch_size_options = [-1, 0.7, 0.8, 0.9]
+        self.selected_batch_size = tk.DoubleVar(value=self.batch_size_options[0])
         self.save_period_options = [-1, 2, 4, 8, 16, 32, 64]
         self.selected_save_period = tk.IntVar(value=self.save_period_options[0])
         self.epoch_options = [15, 25, 50, 75, 100, 200, 300]
-        self.selected_epochs = tk.IntVar(value=self.epoch_options[1])
+        self.selected_epochs = tk.IntVar(value=self.epoch_options[6])
         # Nuovo: Opzioni
         self.worker_options = [1, 2, 3, 4, 5, 6, 7, 8]
         self.selected_workers = tk.IntVar(value=7)
-        #self.boolean_options = ["True", "False"]
         self.selected_pretrained = tk.StringVar(value="True")
         self.selected_single_cls = tk.StringVar(value="False")
         self.patience_options = [20, 40, 60, 100]
-        self.selected_patience = tk.IntVar(value=40)
+        self.selected_patience = tk.IntVar(value=20)
 
 
         self.small_font = Font(family="Helvetica", size=9)
@@ -45,7 +54,6 @@ class YOLOTrainingGUI:
         self.create_dropdown("Batch Size (batch):", "batch_selection", self.batch_size_options, self.selected_batch_size)
         self.create_dropdown("Save Period:", "save_period_selection", self.save_period_options, self.selected_save_period)
         self.create_dropdown("Epochs:", "epoch_selection", self.epoch_options, self.selected_epochs)
-        # Nuovi dropdown per Workers ,Pretrained,single_cls
         self.create_dropdown("Workers:", "worker_selection", self.worker_options, self.selected_workers)
         self.create_dropdown("Pretrained:", "pretrained_selection", self.boolean_options, self.selected_pretrained)
         self.create_dropdown("Single Class Mode:", "single_cls_selection", self.boolean_options, self.selected_single_cls)
@@ -58,6 +66,10 @@ class YOLOTrainingGUI:
         self.create_button("Browse for last.pt", self.browse_resume_lastpt)
 
         self.create_button("Resume Training", self.resume_training, "green")
+
+        # CSV results part
+        self.create_entry("Select CSV File:", "csv_path", 30, font=self.small_font, bg="#f0f0f0")
+        self.create_button("show results", self.browse_csv)
 
     def create_model_dropdown(self, label_text, var_name, options):
         self.create_dropdown(label_text, var_name, options, self.selected_model)
@@ -88,6 +100,12 @@ class YOLOTrainingGUI:
         if file_path:
             self.yaml_path.set(file_path)
 
+    def browse_csv(self):
+        file_path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
+        if file_path:
+            self.csv_path.set(file_path)
+            self.load_and_display_csv_results(file_path)
+
     def train_model(self):
         yaml_path = self.yaml_path.get()
         if yaml_path:
@@ -107,7 +125,7 @@ class YOLOTrainingGUI:
             model_path = f"{selected_model}.pt"
             self.model = YOLO(model_path)
 
-            results = self.model.train(data=yaml_path, epochs=epochs, batch=0.85, imgsz=imgsz,
+            results = self.model.train(data=yaml_path, epochs=epochs, batch=batch, imgsz=imgsz,
                                        cache=cache, amp=amp, val=val, save_period=save_period,
                                        workers=workers, pretrained=pretrained, single_cls=single_cls,patience=patience)
             print("Training results:", results)
@@ -131,8 +149,19 @@ class YOLOTrainingGUI:
             results = self.model.train(resume=True, data=resume_lastpt_path)
             print("Resume Training results:", results)
 
+    def load_and_display_csv_results(self, file_path):
+        df = pd.read_csv(file_path)
+        ultima_epoca = df.iloc[-1]
+        results = ultima_epoca[['train/box_loss', 'train/cls_loss', 'train/dfl_loss',
+                                'val/box_loss', 'val/cls_loss', 'val/dfl_loss',
+                                'metrics/precision(B)', 'metrics/recall(B)', 'metrics/mAP50(B)', 'metrics/mAP50-95(B)']]
+        print("Risultati finali all'ultima epoca:")
+        print(results)
+
 if __name__ == "__main__":
     root = tk.Tk()
     gui = YOLOTrainingGUI(root)
     root.mainloop()
+
+
 
