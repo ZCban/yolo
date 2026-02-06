@@ -1,0 +1,55 @@
+# 1️⃣ Installiamo i pacchetti necessari
+!pip install roboflow --quiet
+!pip install ultralytics --quiet
+!pip install pyyaml --quiet  # per leggere il YAML
+
+# 2️⃣ Importiamo le librerie
+from roboflow import Roboflow
+from ultralytics import YOLO
+import yaml
+import os
+
+# 3️⃣ Configuriamo Roboflow e scarichiamo il dataset
+rf = Roboflow(api_key="")
+project = rf.workspace("rainbow-six-siege").project("r6-dataset-sjibl")
+version = project.version(8)
+
+# Scarica il dataset YOLOv8 e salva il percorso
+dataset_path = version.download("yolov8").location
+print("Dataset scaricato in:", dataset_path)
+
+# 4️⃣ Leggiamo il file data.yaml e stampiamo le classi
+yaml_file = os.path.join(dataset_path, "data.yaml")
+with open(yaml_file, "r") as f:
+    data = yaml.safe_load(f)
+
+print("Classi del dataset:")
+for idx, class_name in enumerate(data['names']):
+    print(f"{idx}: {class_name}")
+
+# 5️⃣ Creiamo il modello YOLOv8s
+model = YOLO("yolov8s.pt")  # parte da un modello pre-addestrato
+
+# 6️⃣ Allenamento solo sulle classi 0 e 1 con i nuovi parametri
+model.train(
+    data=yaml_file,                  # file YAML generato da Roboflow
+    epochs=100,                      # numero di epoche
+    imgsz=512,                       # dimensione immagine
+    batch=-1,                        # batch automatico in base alla GPU
+    name="r6_yolov8s_results_subset", # cartella dove salvare i risultati
+    classes=[0, 1],                  # allenamento solo su classi 0 e 1
+    cache='ram',                      # carica immagini in RAM
+    val=False,                        # salta la validazione
+    amp=True,                         # usa mixed precision (FP16)
+    optimizer='SGD'                   # usa SGD invece del default
+)
+
+
+import shutil
+from google.colab import files
+
+# 1️⃣ Zippa la cartella runs
+shutil.make_archive("/content/runs", 'zip', "/content/runs")
+
+# 2️⃣ Scarica il file zip sul PC
+files.download("/content/runs.zip")
