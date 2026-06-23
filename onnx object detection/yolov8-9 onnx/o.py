@@ -68,7 +68,11 @@ class Predict:
         self.get_output_details()
         self.classes = self.get_class_names()
         self.classes_array = np.array(self.classes)
-        self.color_palette = np.random.uniform(0, 255, size=(len(self.classes), 3)).astype(np.uint8)
+        self.color_palette = np.random.uniform(0, 255, size=(len(self.classes),3)).astype(np.uint8)
+
+        self.binding = self.session.io_binding()
+        for name in self.output_names:
+            self.binding.bind_output(name, device_type='cpu')
 
     # ------------------- Detect -------------------
     def detect_objects1(self, image):
@@ -77,7 +81,25 @@ class Predict:
         return self.postprocess(image, outputs)
 
     def detect_objects(self, image):
-        outputs = self.inference(image)
+        #outputs = self.inference(image)
+        #return self.postprocess(image, outputs)
+        input_tensor = image  # già pronto da C++ (NO preprocess)
+        if input_tensor is None:
+            return None
+        self.binding.clear_binding_inputs()
+
+        self.binding.bind_input(
+            name=self.input_names[0],
+            device_type='cpu',
+            device_id=0,
+            element_type=np.float32,
+            shape=[1, 3, self.input_height, self.input_width],
+            buffer_ptr=input_tensor.ctypes.data )
+
+        self.session.run_with_iobinding(self.binding)
+
+        ort_outputs = self.binding.get_outputs()
+        outputs = ort_outputs[0].numpy()
         return self.postprocess(image, outputs)
 
     # ------------------- Preprocess -------------------
