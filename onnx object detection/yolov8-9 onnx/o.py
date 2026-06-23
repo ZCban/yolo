@@ -17,7 +17,9 @@ import gpu_capture
 
 
 
-gpu_capture.initialize_capture(512, 512)
+#gpu_capture.initialize_capture(512, 512)
+#inizializza 512x512 rgba, zomm
+gpu_capture.initialize_capture(512, 512,False,False)
 
 print("Engine GPU-Image avviato. Loop attivo...")
 
