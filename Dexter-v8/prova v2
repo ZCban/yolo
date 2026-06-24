@@ -1,0 +1,199 @@
+import json
+import numpy as np
+import torch
+import tensorrt as trt
+from collections import OrderedDict, namedtuple
+import cv2
+
+class PredictTRT:
+    def __init__(self, engine_path, confidence_thres=0.4, iou_thres=0.5, center=256):
+        self.confidence_thres = confidence_thres
+        self.iou_thres = iou_thres
+        self.center = center
+        self.device = torch.device('cuda:0')
+        # pre-alloca tensor input
+        self.input_tensor = torch.zeros(1, 3, self.input_height, self.input_width, device=self.device)
+        if self.fp16:
+            self.input_tensor = self.input_tensor.half()
+
+        # ------------------- Load TensorRT engine -------------------
+        Binding = namedtuple("Binding", ("name", "dtype", "shape", "data", "ptr"))
+        logger = trt.Logger(trt.Logger.INFO)
+
+        with open(engine_path, "rb") as f, trt.Runtime(logger) as runtime:
+            try:
+                meta_len = int.from_bytes(f.read(4), byteorder="little")
+                metadata = json.loads(f.read(meta_len).decode("utf-8"))
+            except UnicodeDecodeError:
+                f.seek(0)
+                metadata = None
+            self.engine = runtime.deserialize_cuda_engine(f.read())
+
+        self.context = self.engine.create_execution_context()
+
+        # ------------------- Info modello -------------------
+        if metadata:
+            self.classes = list(metadata.get('names', {}).values())
+            self.end2end = metadata.get('end2end', False)
+            self.input_height, self.input_width = metadata.get('imgsz', [512, 512])
+        else:
+            self.classes = []
+            self.end2end = False
+            self.input_height, self.input_width = 512, 512
+
+        self.classes_array = np.array(self.classes)
+        print(f"End2End: {self.end2end}")
+        print(f"Classes: {self.classes}")
+
+        # ------------------- Setup bindings -------------------
+        self.bindings = OrderedDict()
+        self.output_names = []
+        self.fp16 = False
+        self.dynamic = False
+        self.is_trt10 = not hasattr(self.engine, "num_bindings")
+        num = range(self.engine.num_io_tensors) if self.is_trt10 else range(self.engine.num_bindings)
+
+        for i in num:
+            if self.is_trt10:
+                name = self.engine.get_tensor_name(i)
+                dtype = trt.nptype(self.engine.get_tensor_dtype(name))
+                is_input = self.engine.get_tensor_mode(name) == trt.TensorIOMode.INPUT
+                shape = tuple(self.engine.get_tensor_shape(name))
+                profile_shape = tuple(self.engine.get_tensor_profile_shape(name, 0)[2]) if is_input else None
+            else:
+                name = self.engine.get_binding_name(i)
+                dtype = trt.nptype(self.engine.get_binding_dtype(i))
+                is_input = self.engine.binding_is_input(i)
+                shape = tuple(self.engine.get_binding_shape(i))
+                profile_shape = tuple(self.engine.get_profile_shape(0, i)[1]) if is_input else None
+
+            if is_input:
+                if -1 in shape:
+                    self.dynamic = True
+                    if self.is_trt10:
+                        self.context.set_input_shape(name, profile_shape)
+                    else:
+                        self.context.set_binding_shape(i, profile_shape)
+                if dtype == np.float16:
+                    self.fp16 = True
+            else:
+                self.output_names.append(name)
+
+            shape = (
+                tuple(self.context.get_tensor_shape(name))
+                if self.is_trt10
+                else tuple(self.context.get_binding_shape(i))
+            )
+            im = torch.from_numpy(np.empty(shape, dtype=dtype)).to(self.device)
+            self.bindings[name] = Binding(name, dtype, shape, im, int(im.data_ptr()))
+
+        self.binding_addrs = OrderedDict((n, d.ptr) for n, d in self.bindings.items())
+
+        # warmup
+        self._warmup()
+
+    # ------------------- Warmup -------------------
+    def _warmup(self):
+        dummy = torch.zeros(1, 3, self.input_height, self.input_width, device=self.device)
+        if self.fp16:
+            dummy = dummy.half()
+        for _ in range(3):
+            self._forward(dummy)
+        print("Warmup done")
+
+    # ------------------- Inference -------------------
+    def _forward(self, im: torch.Tensor):
+        self.binding_addrs["images"] = int(im.data_ptr())
+        self.context.execute_v2(list(self.binding_addrs.values()))
+        return [self.bindings[x].data for x in sorted(self.output_names)]
+
+    # ------------------- Detect -------------------
+    def detect_objects(self, image):
+    self.input_tensor.copy_(torch.from_numpy(image))
+    preds = self._forward(self.input_tensor)
+    if self.end2end:
+        return self._postprocess_end2end(preds)
+    else:
+        return self._postprocess_standard(preds)
+
+    # ------------------- Postprocess end2end -------------------
+    def _postprocess_end2end(self, preds):
+        if isinstance(preds, (list, tuple)):
+            boxes = preds[0].squeeze().cpu().numpy()
+            scores = preds[1].squeeze().cpu().numpy()
+            class_ids = preds[2].squeeze().cpu().numpy().astype(np.int32)
+        else:
+            preds = preds.squeeze().cpu().numpy()
+            boxes = preds[:, :4]
+            scores = preds[:, 4]
+            class_ids = preds[:, 5].astype(np.int32)
+
+        mask = scores > self.confidence_thres
+        boxes = boxes[mask]
+        scores = scores[mask]
+        class_ids = class_ids[mask]
+
+        if not len(scores):
+            return np.array([]), np.array([]), np.array([]), np.array([])
+
+        class_names = self.classes_array[class_ids]
+        return boxes, scores, class_ids, class_names
+
+    # ------------------- Postprocess standard -------------------
+    def _postprocess_standard(self, preds):
+        outputs = preds[0].cpu().numpy() if isinstance(preds, (list, tuple)) else preds.cpu().numpy()
+        outputs = np.squeeze(outputs).T
+
+        if outputs.size == 0:
+            return np.array([]), np.array([]), np.array([]), np.array([])
+
+        scores = outputs[:, 4:].max(axis=1)
+        mask = scores > self.confidence_thres
+        outputs = outputs[mask]
+        scores = scores[mask]
+
+        if not len(scores):
+            return np.array([]), np.array([]), np.array([]), np.array([])
+
+        class_ids = outputs[:, 4:].argmax(axis=1)
+        boxes = self._extract_boxes(outputs)
+
+        from torchvision.ops import nms as torch_nms
+        boxes_t = torch.from_numpy(boxes).to(self.device)
+        scores_t = torch.from_numpy(scores).float().to(self.device)
+        indices = torch_nms(boxes_t, scores_t, self.iou_thres).cpu().numpy()
+
+        if not len(indices):
+            return np.array([]), np.array([]), np.array([]), np.array([])
+
+        boxes = boxes[indices]
+        scores = scores[indices]
+        class_ids = class_ids[indices]
+        class_names = self.classes_array[class_ids]
+
+        return boxes, scores, class_ids, class_names
+
+    # ------------------- Utils -------------------
+    def _extract_boxes(self, predictions):
+        boxes = predictions[:, :4].copy()
+        boxes[:, 0] = predictions[:, 0] - predictions[:, 2] / 2
+        boxes[:, 1] = predictions[:, 1] - predictions[:, 3] / 2
+        boxes[:, 2] = predictions[:, 0] + predictions[:, 2] / 2
+        boxes[:, 3] = predictions[:, 1] + predictions[:, 3] / 2
+        return boxes
+
+    # ------------------- Draw -------------------
+    def draw_detections(self, img, box, score, class_id):
+        x1, y1, x2, y2 = map(int, box)
+        color = (0, 255, 0)
+        cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
+        label = f"{self.classes[class_id]}: {score:.2f}"
+        cv2.putText(img, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+
+
+class ONNXTRT:
+    def __init__(self, engine_path, confidence_thres=0.3, iou_thres=0.5, center=256):
+        self.predict_model = PredictTRT(engine_path, confidence_thres, iou_thres, center)
+
+    def __call__(self, image):
+        return self.predict_model.detect_objects(image)
